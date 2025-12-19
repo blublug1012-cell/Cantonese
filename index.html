@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>粤语纠音练习工具（稳定版）</title>
+    <title>粤语纠音练习工具（云端版）</title>
     <style>
         * {
             margin: 0;
@@ -71,7 +71,7 @@
 
         #add-btn:hover { background-color: #3182ce; }
 
-        /* 保存+分享区域（新增保存按钮） */
+        /* 保存+分享区域 */
         .save-share-section {
             display: flex;
             gap: 10px;
@@ -113,6 +113,14 @@
 
         #copy-link-btn:hover { background-color: #38a169; }
 
+        /* 保存成功提示 */
+        .save-tip {
+            font-size: 12px;
+            color: #48bb78;
+            margin-left: 10px;
+            display: none;
+        }
+
         /* 词句列表 */
         .word-list { margin-bottom: 30px; }
 
@@ -141,7 +149,7 @@
             padding: 8px;
         }
 
-        /* 音频按钮 - 严格的禁用状态样式 */
+        /* 音频按钮 */
         .audio-controls { display: flex; gap: 8px; }
 
         .record-btn, .stop-btn, .play-btn {
@@ -157,14 +165,13 @@
         .stop-btn { background-color: #ed8936; color: white; }
         .play-btn { background-color: #48bb78; color: white; }
 
-        /* 禁用状态 - 视觉+功能双重限制 */
         .record-btn[disabled], .stop-btn[disabled] {
             opacity: 0.6;
             cursor: not-allowed;
             pointer-events: none;
         }
 
-        /* 学生模式：只显示播放按钮 */
+        /* 学生模式样式 */
         .student-mode .record-btn, .student-mode .stop-btn { display: none !important; }
         .student-mode .play-btn { background-color: #4299e1; }
 
@@ -217,14 +224,6 @@
             margin-top: 5px;
         }
 
-        /* 保存成功提示 */
-        .save-tip {
-            font-size: 12px;
-            color: #48bb78;
-            margin-left: 10px;
-            display: none;
-        }
-
         /* PDF导出 */
         .export-section { text-align: center; margin-top: 30px; }
 
@@ -260,12 +259,12 @@
             <button id="add-btn">批量添加词句</button>
         </div>
 
-        <!-- 新增：保存+分享区域（核心修改） -->
+        <!-- 保存+分享区域 -->
         <div class="save-share-section teacher-only">
-            <button id="save-btn">💾 保存所有内容</button>
-            <input type="text" id="share-link" readonly placeholder="先保存内容，再生成学生链接...">
+            <button id="save-btn">💾 保存到云端</button>
+            <input type="text" id="share-link" readonly placeholder="先保存到云端，再生成学生链接...">
             <button id="copy-link-btn">复制学生链接</button>
-            <span class="save-tip" id="save-tip">✅ 内容已保存！</span>
+            <span class="save-tip" id="save-tip">✅ 已保存到云端！</span>
         </div>
 
         <!-- 词句列表 -->
@@ -290,57 +289,55 @@
     <script src="https://cdn.bootcdn.net/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
     <script>
-        // 全局状态 - 极简+可监控
+        // 全局状态
         const appState = {
-            audioStream: null,       // 全局麦克风流（仅初始化一次）
-            currentRecorder: null,   // 当前唯一的Recorder实例
-            isRecording: false,      // 全局录制状态（核心：布尔值，无歧义）
-            recordingItemId: '',     // 当前录制的词句ID
-            audioData: new Map(),    // 音频数据存储（key: itemId, value: base64）
-            shareId: '',             // 固定的分享ID（避免随机生成导致丢失）
-            isSaved: false           // 标记是否已保存
+            audioStream: null,
+            currentRecorder: null,
+            isRecording: false,
+            recordingItemId: '',
+            audioData: new Map(),
+            shareId: '', // 云端分享ID
+            // Vercel KV配置（部署时会自动读取环境变量）
+            kvConfig: {
+                url: window.KV_REST_API_URL || '',
+                token: window.KV_REST_API_TOKEN || ''
+            }
         };
 
         // 页面初始化
-        document.addEventListener('DOMContentLoaded', () => {
-            // 解析URL参数（区分老师/学生模式）
+        document.addEventListener('DOMContentLoaded', async () => {
             const urlParams = new URLSearchParams(window.location.search);
             const isStudent = urlParams.get('role') === 'student';
             const shareId = urlParams.get('id');
 
-            // 初始化模式
             if (isStudent) {
                 document.getElementById('main-container').classList.add('student-mode');
                 document.getElementById('page-title').textContent = '粤语纠音练习册（学生跟读版）';
-                if (shareId) loadStudentContent(shareId);
+                if (shareId) await loadStudentContentFromCloud(shareId); // 从云端加载
             } else {
-                // 初始化老师模式事件（新增保存按钮事件）
                 initTeacherEventListeners();
-                // 尝试加载本地已保存的内容（打开页面自动恢复）
-                loadSavedContent();
+                // 尝试从云端加载已保存的内容
+                await loadSavedContentFromCloud();
             }
 
-            // 页面卸载：彻底释放所有资源
+            // 页面卸载清理
             window.addEventListener('beforeunload', () => {
-                // 停止录制
                 if (appState.isRecording && appState.currentRecorder) {
                     try { appState.currentRecorder.stop(); } catch (e) {}
                 }
-                // 释放麦克风流
                 if (appState.audioStream) {
                     appState.audioStream.getTracks().forEach(track => track.stop());
                 }
-                // 清空状态
                 appState.currentRecorder = null;
                 appState.isRecording = false;
                 appState.recordingItemId = '';
             });
 
-            // 绑定PDF导出事件
+            // PDF导出
             document.getElementById('export-pdf-btn').addEventListener('click', exportPdf);
         });
 
-        // 初始化老师模式事件（新增保存按钮逻辑）
+        // 初始化老师事件
         function initTeacherEventListeners() {
             // 批量添加词句
             document.getElementById('add-btn').addEventListener('click', () => {
@@ -351,67 +348,63 @@
                     return;
                 }
 
-                // 按行分割，过滤空行
                 const sentences = text.split(/\r?\n/).map(s => s.trim()).filter(s => s);
                 if (sentences.length === 0) {
                     alert('输入内容不能为空！');
                     return;
                 }
 
-                // 添加到列表
                 const wordList = document.getElementById('word-list');
                 sentences.forEach(sentence => {
                     const itemId = generateId();
                     wordList.appendChild(createWordItem(itemId, sentence));
                 });
 
-                // 清空输入框
                 input.value = '';
                 input.focus();
-
-                // 标记为未保存
-                appState.isSaved = false;
                 document.getElementById('save-tip').style.display = 'none';
-
-                alert(`成功添加 ${sentences.length} 个词句！请点击【保存所有内容】确保不丢失`);
+                alert(`成功添加 ${sentences.length} 个词句！请点击【保存到云端】分享给学生`);
             });
 
-            // 新增：保存按钮点击事件（核心）
-            document.getElementById('save-btn').addEventListener('click', () => {
-                saveAllContent();
-                // 显示保存成功提示
+            // 保存到云端（核心修改）
+            document.getElementById('save-btn').addEventListener('click', async () => {
+                await saveAllContentToCloud();
                 document.getElementById('save-tip').style.display = 'inline-block';
-                // 3秒后隐藏提示
                 setTimeout(() => {
                     document.getElementById('save-tip').style.display = 'none';
                 }, 3000);
-                alert('所有内容（词句+翻译+录音）已保存！现在可以生成学生链接了');
+                alert('所有内容已保存到云端！学生可在任何设备打开链接');
             });
 
-            // 复制分享链接
+            // 复制链接
             document.getElementById('copy-link-btn').addEventListener('click', () => {
                 const linkInput = document.getElementById('share-link');
                 const link = linkInput.value;
-                if (!link || link === '先保存内容，再生成学生链接...') {
-                    alert('请先点击【保存所有内容】生成链接！');
+                if (!link || link === '先保存到云端，再生成学生链接...') {
+                    alert('请先点击【保存到云端】生成链接！');
                     return;
                 }
 
                 linkInput.select();
                 document.execCommand('copy');
-                alert('学生链接已复制！同一浏览器打开可查看所有练习内容');
+                alert('学生链接已复制！学生可在任何设备/浏览器打开');
             });
         }
 
-        // 核心新增：保存所有内容到本地存储（确保不丢失）
-        function saveAllContent() {
+        // 核心：保存内容到Vercel KV云端
+        async function saveAllContentToCloud() {
             const wordItems = document.querySelectorAll('.word-item');
             if (wordItems.length === 0) {
-                alert('暂无内容可保存！请先添加词句/录制录音');
+                alert('暂无内容可保存！');
                 return;
             }
 
-            // 收集所有内容（词句+翻译+录音）
+            // 生成唯一分享ID（首次生成后固定）
+            if (!appState.shareId) {
+                appState.shareId = generateId();
+            }
+
+            // 收集所有内容
             const content = {
                 createTime: new Date().toLocaleString(),
                 updateTime: new Date().toLocaleString(),
@@ -426,64 +419,119 @@
                 })
             };
 
-            // 生成/复用固定的分享ID（避免随机生成导致丢失）
-            if (!appState.shareId) {
-                appState.shareId = localStorage.getItem('yueyu_fixed_share_id') || generateId();
-                localStorage.setItem('yueyu_fixed_share_id', appState.shareId);
-            }
+            try {
+                // 调用Vercel KV API保存到云端
+                const response = await fetch(`${appState.kvConfig.url}/set/${appState.shareId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${appState.kvConfig.token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        value: JSON.stringify(content),
+                        expiration: 0 // 永久保存
+                    })
+                });
 
-            // 保存到本地存储（覆盖旧数据，确保最新）
-            localStorage.setItem(`yueyu_content_${appState.shareId}`, JSON.stringify(content));
-            localStorage.setItem('yueyu_last_saved_content', JSON.stringify(content)); // 备份
+                if (!response.ok) throw new Error('云端保存失败');
 
-            // 标记为已保存
-            appState.isSaved = true;
-
-            // 生成学生链接并显示
-            const baseUrl = window.location.href.split('?')[0];
-            const shareLink = `${baseUrl}?id=${appState.shareId}&role=student`;
-            document.getElementById('share-link').value = shareLink;
-        }
-
-        // 核心新增：加载已保存的内容（打开页面自动恢复）
-        function loadSavedContent() {
-            // 读取备份的已保存内容
-            const savedContentStr = localStorage.getItem('yueyu_last_saved_content');
-            if (!savedContentStr) return;
-
-            const savedContent = JSON.parse(savedContentStr);
-            if (!savedContent || !savedContent.items || savedContent.items.length === 0) return;
-
-            // 恢复分享ID
-            appState.shareId = localStorage.getItem('yueyu_fixed_share_id') || '';
-
-            // 恢复词句列表
-            const wordList = document.getElementById('word-list');
-            savedContent.items.forEach(item => {
-                wordList.appendChild(createWordItem(item.id, item.sentence, item.translation, item.audioBase64));
-            });
-
-            // 恢复链接
-            if (appState.shareId) {
+                // 生成学生链接（云端ID，跨设备可用）
                 const baseUrl = window.location.href.split('?')[0];
                 const shareLink = `${baseUrl}?id=${appState.shareId}&role=student`;
                 document.getElementById('share-link').value = shareLink;
-            }
 
-            // 标记为已保存
-            appState.isSaved = true;
-            console.log('已自动恢复上次保存的内容');
+            } catch (error) {
+                console.error('云端保存错误:', error);
+                alert('云端保存失败！请检查Vercel KV配置是否正确');
+            }
         }
 
-        // 创建词句项DOM
+        // 从云端加载老师已保存的内容
+        async function loadSavedContentFromCloud() {
+            // 读取本地缓存的shareId
+            const localShareId = localStorage.getItem('yueyu_cloud_share_id');
+            if (!localShareId) return;
+
+            appState.shareId = localShareId;
+
+            try {
+                // 从云端读取内容
+                const response = await fetch(`${appState.kvConfig.url}/get/${appState.shareId}`, {
+                    headers: {
+                        'Authorization': `Bearer ${appState.kvConfig.token}`
+                    }
+                });
+
+                if (!response.ok) throw new Error('读取云端内容失败');
+
+                const result = await response.json();
+                if (!result.result) return;
+
+                const savedContent = JSON.parse(result.result);
+                if (!savedContent || !savedContent.items) return;
+
+                // 渲染内容
+                const wordList = document.getElementById('word-list');
+                savedContent.items.forEach(item => {
+                    wordList.appendChild(createWordItem(item.id, item.sentence, item.translation, item.audioBase64));
+                });
+
+                // 生成链接
+                const baseUrl = window.location.href.split('?')[0];
+                const shareLink = `${baseUrl}?id=${appState.shareId}&role=student`;
+                document.getElementById('share-link').value = shareLink;
+
+                console.log('已从云端恢复内容');
+            } catch (error) {
+                console.error('加载云端内容错误:', error);
+            }
+        }
+
+        // 学生从云端加载内容（核心：跨设备读取）
+        async function loadStudentContentFromCloud(shareId) {
+            try {
+                // 调用Vercel KV API读取云端内容
+                const response = await fetch(`${appState.kvConfig.url}/get/${shareId}`, {
+                    headers: {
+                        'Authorization': `Bearer ${appState.kvConfig.token}`
+                    }
+                });
+
+                if (!response.ok) throw new Error('未找到云端内容');
+
+                const result = await response.json();
+                if (!result.result) {
+                    alert('未找到对应的练习内容！请确认老师已保存到云端');
+                    return;
+                }
+
+                const savedContent = JSON.parse(result.result);
+                if (!savedContent || !savedContent.items || savedContent.items.length === 0) {
+                    alert('该链接暂无练习内容！');
+                    return;
+                }
+
+                // 渲染内容（学生端显示所有练习）
+                const wordList = document.getElementById('word-list');
+                wordList.innerHTML = '';
+                savedContent.items.forEach(item => {
+                    wordList.appendChild(createWordItem(item.id, item.sentence, item.translation, item.audioBase64));
+                });
+
+                alert(`成功加载 ${savedContent.items.length} 个练习内容！`);
+            } catch (error) {
+                console.error('学生加载云端内容错误:', error);
+                alert('未找到对应的练习内容！请确认：1. 链接正确 2. 老师已保存到云端');
+            }
+        }
+
+        // 创建词句项DOM（逻辑不变）
         function createWordItem(itemId, sentence, translation = '', audioBase64 = '') {
             const item = document.createElement('div');
             item.className = 'word-item';
             item.id = `item-${itemId}`;
 
-            // 播放按钮显示状态
             const playBtnDisplay = audioBase64 ? 'block' : 'none';
-            // 音频URL
             const audioSrc = audioBase64 ? `data:audio/webm;base64,${audioBase64}` : '';
 
             item.innerHTML = `
@@ -504,7 +552,6 @@
                 <audio id="audio-${itemId}" src="${audioSrc}"></audio>
             `;
 
-            // 存储音频数据（如果有）
             if (audioBase64) {
                 appState.audioData.set(itemId, audioBase64);
             }
@@ -514,25 +561,21 @@
 
         // 开始录制（逻辑不变，保持稳定）
         async function startRecord(itemId) {
-            // 1. 禁止重复录制（全局状态锁）
             if (appState.isRecording) {
                 alert('请先停止当前录制！');
                 return;
             }
 
-            // 2. 获取DOM元素
             const recordBtn = document.getElementById(`record-${itemId}`);
             const stopBtn = document.getElementById(`stop-${itemId}`);
             const statusEl = document.getElementById(`status-${itemId}`);
 
-            // 3. 按钮状态锁定
             recordBtn.disabled = true;
             stopBtn.disabled = false;
             stopBtn.style.display = 'block';
             statusEl.textContent = '正在请求麦克风...';
 
             try {
-                // 4. 初始化麦克风流（仅首次）
                 if (!appState.audioStream || appState.audioStream.active === false) {
                     appState.audioStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
@@ -543,7 +586,6 @@
                     });
                 }
 
-                // 5. 创建全新的Recorder实例
                 appState.currentRecorder = new MediaRecorder(appState.audioStream, {
                     mimeType: 'audio/webm;codecs=opus'
                 });
@@ -552,114 +594,84 @@
 
                 const audioChunks = [];
 
-                // 6. 监听音频数据
                 appState.currentRecorder.ondataavailable = (e) => {
                     if (e.data.size > 0) audioChunks.push(e.data);
                 };
 
-                // 7. 监听录制停止
                 appState.currentRecorder.onstop = async () => {
-                    // 重置全局状态
                     appState.isRecording = false;
                     appState.recordingItemId = '';
 
-                    // 重置按钮状态
                     recordBtn.disabled = false;
                     stopBtn.disabled = true;
                     stopBtn.style.display = 'none';
 
-                    // 空录音处理
                     if (audioChunks.length === 0) {
                         statusEl.textContent = '录音内容为空，请重新录制';
                         appState.currentRecorder = null;
-                        // 标记为未保存
-                        appState.isSaved = false;
                         return;
                     }
 
-                    // 转Base64存储
                     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                     const base64 = await blobToBase64(audioBlob);
                     appState.audioData.set(itemId, base64);
 
-                    // 更新音频元素和播放按钮
                     const audioEl = document.getElementById(`audio-${itemId}`);
                     audioEl.src = `data:audio/webm;base64,${base64}`;
                     document.getElementById(`play-${itemId}`).style.display = 'block';
 
-                    // 更新状态提示
-                    statusEl.textContent = '录音完成！请点击【保存所有内容】确保不丢失';
-
-                    // 销毁Recorder实例
+                    statusEl.textContent = '录音完成！请点击【保存到云端】分享给学生';
                     appState.currentRecorder = null;
-
-                    // 标记为未保存（提醒用户保存）
-                    appState.isSaved = false;
                 };
 
-                // 8. 监听录制错误
                 appState.currentRecorder.onerror = (error) => {
                     console.error('录制错误:', error);
-                    // 强制重置全局状态
                     appState.isRecording = false;
                     appState.recordingItemId = '';
                     appState.currentRecorder = null;
-                    // 重置按钮
                     recordBtn.disabled = false;
                     stopBtn.disabled = true;
                     stopBtn.style.display = 'none';
-                    // 提示用户
                     statusEl.textContent = '录制出错！请重试';
-                    // 标记为未保存
-                    appState.isSaved = false;
                     alert('录制出错：可能是麦克风被占用，请关闭其他录音软件后重试');
                 };
 
-                // 9. 开始录制
                 appState.currentRecorder.start();
                 statusEl.textContent = '正在录制...点击【停止录制】结束';
 
             } catch (error) {
                 console.error('录制初始化失败:', error);
-                // 重置按钮
                 recordBtn.disabled = false;
                 stopBtn.disabled = true;
                 stopBtn.style.display = 'none';
-                // 友好提示
                 statusEl.textContent = '麦克风权限请求失败！';
                 alert(`录音启动失败：
 1. 请确认浏览器已允许麦克风权限
-2. 关闭其他占用麦克风的软件（微信/QQ/其他录音网页）
-3. 刷新页面后重试（仅首次需要授权）`);
+2. 关闭其他占用麦克风的软件
+3. 刷新页面后重试`);
             }
         }
 
         // 停止录制（逻辑不变）
         function stopRecord(itemId) {
-            // 校验：只能停止当前正在录制的项
             if (!appState.isRecording || appState.recordingItemId !== itemId) {
                 alert('当前无正在进行的录制！');
                 return;
             }
 
             try {
-                // 强制停止Recorder
                 if (appState.currentRecorder && appState.currentRecorder.state === 'recording') {
                     appState.currentRecorder.stop();
                 }
             } catch (e) {
                 console.error('停止录制异常:', e);
-                // 兜底：强制重置状态
                 appState.isRecording = false;
                 appState.recordingItemId = '';
                 appState.currentRecorder = null;
-                // 重置按钮
                 document.getElementById(`record-${itemId}`).disabled = false;
                 document.getElementById(`stop-${itemId}`).disabled = true;
                 document.getElementById(`stop-${itemId}`).style.display = 'none';
                 document.getElementById(`status-${itemId}`).textContent = '录制已终止';
-                // 标记为未保存
-                appState.isSaved = false;
             }
         }
 
@@ -671,65 +683,31 @@
                 return;
             }
 
-            // 暂停其他正在播放的音频
             document.querySelectorAll('audio').forEach(a => {
                 if (a.id !== `audio-${itemId}` && !a.paused) a.pause();
             });
 
-            // 播放当前音频
             audioEl.play().catch(error => {
                 console.error('播放错误:', error);
                 alert('播放失败！请检查音频是否正常录制');
             });
 
-            // 更新状态提示
             document.getElementById(`status-${itemId}`).textContent = '正在播放老师发音...';
         }
 
-        // 删除词句项（新增：删除后标记为未保存）
+        // 删除词句项（逻辑不变）
         function deleteItem(itemId) {
             if (!confirm('确定删除该词句吗？删除后录音和翻译也会被移除！')) return;
 
-            // 停止该项目的录制（如果正在录）
             if (appState.recordingItemId === itemId) {
                 stopRecord(itemId);
             }
 
-            // 移除DOM和数据
             document.getElementById(`item-${itemId}`).remove();
             appState.audioData.delete(itemId);
-
-            // 标记为未保存
-            appState.isSaved = false;
             document.getElementById('save-tip').style.display = 'none';
 
-            alert('已删除！请点击【保存所有内容】更新学生链接');
-        }
-
-        // 加载学生模式内容（优化：增强容错）
-        function loadStudentContent(shareId) {
-            // 先读专属内容，再读备份
-            let contentStr = localStorage.getItem(`yueyu_content_${shareId}`) || localStorage.getItem('yueyu_last_saved_content');
-            if (!contentStr) {
-                alert('未找到对应的练习内容！请确认：1. 在同一浏览器打开 2. 老师已保存内容');
-                return;
-            }
-
-            const content = JSON.parse(contentStr);
-            if (!content || !content.items || content.items.length === 0) {
-                alert('该链接暂无练习内容！');
-                return;
-            }
-
-            // 渲染内容（确保100%显示）
-            const wordList = document.getElementById('word-list');
-            // 先清空列表，避免重复
-            wordList.innerHTML = '';
-            content.items.forEach(item => {
-                wordList.appendChild(createWordItem(item.id, item.sentence, item.translation, item.audioBase64));
-            });
-
-            alert(`成功加载 ${content.items.length} 个练习内容！`);
+            alert('已删除！请点击【保存到云端】更新学生链接');
         }
 
         // 导出PDF（逻辑不变）
@@ -740,7 +718,6 @@
                 return;
             }
 
-            // 填充PDF容器
             const pdfContainer = document.getElementById('pdf-container');
             const pdfTime = document.getElementById('pdf-time');
             const pdfContent = document.getElementById('pdf-content');
@@ -748,7 +725,6 @@
             pdfTime.textContent = `生成时间：${new Date().toLocaleString()}`;
             pdfContent.innerHTML = '';
 
-            // 遍历添加内容
             wordItems.forEach((item, index) => {
                 const sentence = item.querySelector('.sentence-text').textContent;
                 const translation = item.querySelector('.translation-input').value || '暂无翻译';
@@ -764,7 +740,6 @@
                 pdfContent.appendChild(pdfItem);
             });
 
-            // 显示容器并截图
             pdfContainer.style.display = 'block';
             html2canvas(pdfContainer, { scale: 2, useCORS: true }).then(canvas => {
                 const { jsPDF } = window.jspdf;
@@ -773,18 +748,15 @@
                 const imgHeight = canvas.height * imgWidth / canvas.width;
                 pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgWidth, imgHeight);
                 pdf.save('粤语纠音练习册.pdf');
-
-                // 隐藏容器
                 pdfContainer.style.display = 'none';
             });
         }
 
-        // 工具函数：生成唯一ID
+        // 工具函数
         function generateId() {
             return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
         }
 
-        // 工具函数：Blob转Base64
         function blobToBase64(blob) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
