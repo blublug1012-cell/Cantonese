@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>粤语口语练习工具</title>
+    <title>粤语口语练习工具（逐句录音频）</title>
     <style>
         * {
             margin: 0;
@@ -30,6 +30,9 @@
         }
         .input-area {
             margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #eee;
+            border-radius: 5px;
         }
         .input-group {
             margin-bottom: 15px;
@@ -47,22 +50,17 @@
             border-radius: 5px;
             font-size: 16px;
         }
-        textarea {
-            min-height: 80px;
-            resize: vertical;
-        }
         .btn-group {
             display: flex;
             gap: 10px;
-            margin-bottom: 20px;
             flex-wrap: wrap;
         }
         button {
-            padding: 10px 20px;
+            padding: 8px 15px;
             border: none;
             border-radius: 5px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 14px;
             transition: background-color 0.3s;
         }
         .btn-primary {
@@ -114,7 +112,8 @@
         .audio-controls {
             display: flex;
             gap: 10px;
-            margin-top: 10px;
+            align-items: center;
+            flex-wrap: wrap;
         }
         .cloud-area {
             margin: 20px 0;
@@ -130,32 +129,29 @@
         .share-link input {
             flex: 1;
         }
+        .item-btn-group {
+            margin-top: 10px;
+            display: flex;
+            gap: 8px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>粤语口语练习工具</h1>
         
-        <!-- 输入区域 -->
+        <!-- 单句输入区域（逐句添加） -->
         <div class="input-area">
             <div class="input-group">
-                <label for="cantonese-sentence">粤语词句（每行一句）</label>
-                <textarea id="cantonese-sentence" placeholder="输入需要练习的粤语词句，每行一句
-例如：
-我睇得明中文字。
-可唔可以？"></textarea>
+                <label for="cantonese-sentence">粤语词句（单句）</label>
+                <input type="text" id="cantonese-sentence" placeholder="输入一句粤语，例如：我睇得明中文字。">
             </div>
             <div class="input-group">
-                <label for="translation">普通话翻译（每行对应）</label>
-                <textarea id="translation" placeholder="输入对应的普通话翻译，每行对应
-例如：
-我看得懂中文字。
-可不可以？"></textarea>
+                <label for="translation">普通话翻译</label>
+                <input type="text" id="translation" placeholder="输入对应的翻译，例如：我看得懂中文字。">
             </div>
             <div class="btn-group">
-                <button id="add-item" class="btn-primary">批量添加词句</button>
-                <button id="record-audio" class="btn-success">🎙️ 录制音频</button>
-                <button id="stop-record" class="btn-danger" disabled>⏹️ 停止录制</button>
+                <button id="add-single-item" class="btn-primary">添加这句话</button>
             </div>
         </div>
 
@@ -169,174 +165,202 @@
             </div>
         </div>
 
-        <!-- 练习列表 -->
+        <!-- 练习列表（每个句子独立音频控件） -->
         <div class="practice-list" id="practice-list">
             <h3>练习列表</h3>
         </div>
     </div>
 
-    <!-- 脚本必须包裹在 script 标签内，避免显示代码 -->
     <script>
-        // 全局状态
+        // 全局状态：管理云端分享
         const appState = {
             shareId: localStorage.getItem('shareId') || Math.random().toString(36).slice(2, 10),
-            kvConfig: { url: '/api/kv' },
-            mediaRecorder: null,
-            audioChunks: [],
-            currentAudioBlob: null
+            kvConfig: { url: '/api/kv' }
         };
 
         // DOM元素
         const elements = {
             sentenceInput: document.getElementById('cantonese-sentence'),
             translationInput: document.getElementById('translation'),
-            addItemBtn: document.getElementById('add-item'),
-            recordAudioBtn: document.getElementById('record-audio'),
-            stopRecordBtn: document.getElementById('stop-record'),
+            addSingleBtn: document.getElementById('add-single-item'),
             saveToCloudBtn: document.getElementById('save-to-cloud'),
             copyLinkBtn: document.getElementById('copy-link'),
             studentLinkInput: document.getElementById('student-link'),
             practiceList: document.getElementById('practice-list')
         };
 
-        // 初始化
-        function init() {
-            // 绑定批量添加事件
-            elements.addItemBtn.addEventListener('click', addPracticeItems);
-            // 绑定其他事件
-            bindOtherEvents();
-        }
+        // 初始化：绑定添加单句事件
+        elements.addSingleBtn.addEventListener('click', addSingleSentence);
+        // 绑定云端相关事件
+        elements.saveToCloudBtn.addEventListener('click', saveToCloud);
+        elements.copyLinkBtn.addEventListener('click', copyLink);
 
-        // 绑定其他事件
-        function bindOtherEvents() {
-            // 录制音频
-            elements.recordAudioBtn.addEventListener('click', startRecord);
-            elements.stopRecordBtn.addEventListener('click', stopRecord);
-            // 保存云端
-            elements.saveToCloudBtn.addEventListener('click', saveToCloud);
-            // 复制链接
-            elements.copyLinkBtn.addEventListener('click', copyLink);
-        }
+        /**
+         * 添加单句到练习列表（每个句子带独立音频控件）
+         */
+        function addSingleSentence() {
+            const sentence = elements.sentenceInput.value.trim();
+            const translation = elements.translationInput.value.trim() || '无';
 
-        // 批量添加词句
-        function addPracticeItems() {
-            const sentences = elements.sentenceInput.value.trim().split(/[\n\r]+/).filter(line => line);
-            const translations = elements.translationInput.value.trim().split(/[\n\r]+/).filter(line => line);
-
-            if (sentences.length === 0) {
+            if (!sentence) {
                 alert('请输入粤语词句！');
                 return;
             }
 
-            // 补全翻译
-            const fillTrans = [...translations];
-            while (fillTrans.length < sentences.length) fillTrans.push('无');
+            // 生成唯一ID，用于绑定当前句子的音频
+            const itemId = `sentence-${Date.now()}`;
 
-            // 清空旧列表，添加新项
-            elements.practiceList.innerHTML = '<h3>练习列表</h3>';
-            sentences.forEach((sentence, i) => {
-                const item = document.createElement('div');
-                item.className = 'practice-item';
-                item.innerHTML = `
-                    <h3>${sentence.trim()}</h3>
-                    <div class="translation">翻译：${fillTrans[i].trim()}</div>
-                    <div class="audio-controls">
-                        ${appState.currentAudioBlob ? 
-                            `<audio controls src="${URL.createObjectURL(appState.currentAudioBlob)}"></audio>` : 
-                            '<span>暂无录音</span>'
-                        }
-                        <button class="btn-danger delete-item">删除</button>
-                    </div>
-                `;
-                // 删除事件
-                item.querySelector('.delete-item').addEventListener('click', () => item.remove());
-                elements.practiceList.appendChild(item);
-            });
+            // 创建练习项DOM
+            const practiceItem = document.createElement('div');
+            practiceItem.className = 'practice-item';
+            practiceItem.dataset.id = itemId;
+            practiceItem.innerHTML = `
+                <h3>${sentence}</h3>
+                <div class="translation">翻译：${translation}</div>
+                <div class="item-btn-group">
+                    <button class="btn-success record-single" data-target="${itemId}">🎙️ 录这句话</button>
+                    <button class="btn-danger stop-single" data-target="${itemId}" disabled>⏹️ 停止</button>
+                </div>
+                <div class="audio-controls" id="audio-${itemId}">
+                    <span>暂未录制音频</span>
+                </div>
+                <button class="btn-danger delete-item" data-target="${itemId}">删除这句话</button>
+            `;
+
+            // 绑定当前句子的事件：录制、停止、删除
+            bindSingleItemEvents(practiceItem, itemId);
+
+            // 添加到列表
+            elements.practiceList.appendChild(practiceItem);
 
             // 清空输入框
             elements.sentenceInput.value = '';
             elements.translationInput.value = '';
         }
 
-        // 开始录制音频
-        async function startRecord() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                appState.mediaRecorder = new MediaRecorder(stream);
-                appState.audioChunks = [];
+        /**
+         * 绑定单个练习项的独立事件（录制、停止、删除）
+         */
+        function bindSingleItemEvents(itemDom, itemId) {
+            const recordBtn = itemDom.querySelector('.record-single');
+            const stopBtn = itemDom.querySelector('.stop-single');
+            const deleteBtn = itemDom.querySelector('.delete-item');
+            const audioContainer = document.getElementById(`audio-${itemId}`);
 
-                appState.mediaRecorder.ondataavailable = e => appState.audioChunks.push(e.data);
-                appState.mediaRecorder.onstop = () => {
-                    appState.currentAudioBlob = new Blob(appState.audioChunks, { type: 'audio/webm' });
-                    stream.getTracks().forEach(track => track.stop());
-                };
+            // 存储当前句子的录制实例（独立，不影响其他句子）
+            let mediaRecorder = null;
+            let audioChunks = [];
 
-                appState.mediaRecorder.start();
-                elements.recordAudioBtn.disabled = true;
-                elements.stopRecordBtn.disabled = false;
-                alert('开始录音！');
-            } catch (e) {
-                alert('请允许麦克风权限！');
-            }
+            // 1. 录制当前句子的音频
+            recordBtn.addEventListener('click', async () => {
+                try {
+                    // 获取麦克风权限
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+
+                    // 收集当前句子的音频数据
+                    mediaRecorder.ondataavailable = (e) => {
+                        audioChunks.push(e.data);
+                    };
+
+                    // 录制结束：生成当前句子的音频
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        const audioUrl = URL.createObjectURL(audioBlob);
+
+                        // 替换为当前句子的音频播放控件
+                        audioContainer.innerHTML = `
+                            <audio controls src="${audioUrl}"></audio>
+                            <input type="hidden" class="audio-data" value="${audioUrl}">
+                        `;
+
+                        // 停止所有音轨
+                        stream.getTracks().forEach(track => track.stop());
+                    };
+
+                    // 启动录制
+                    mediaRecorder.start();
+                    recordBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    audioContainer.innerHTML = '<span>正在录制...</span>';
+                } catch (error) {
+                    alert('请允许麦克风权限，才能录制音频！');
+                }
+            });
+
+            // 2. 停止当前句子的录制
+            stopBtn.addEventListener('click', () => {
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                    recordBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    audioContainer.innerHTML = '<span>正在处理音频...</span>';
+                }
+            });
+
+            // 3. 删除当前句子
+            deleteBtn.addEventListener('click', () => {
+                itemDom.remove();
+            });
         }
 
-        // 停止录制
-        function stopRecord() {
-            if (appState.mediaRecorder?.state !== 'inactive') {
-                appState.mediaRecorder.stop();
-                elements.recordAudioBtn.disabled = false;
-                elements.stopRecordBtn.disabled = true;
-                alert('录音完成！');
-            }
-        }
-
-        // 保存到云端
+        /**
+         * 保存所有句子（含各自音频）到云端
+         */
         async function saveToCloud() {
-            const items = [];
+            const practiceItems = [];
             document.querySelectorAll('.practice-item').forEach(item => {
-                items.push({
-                    sentence: item.querySelector('h3').textContent,
-                    translation: item.querySelector('.translation').textContent.replace('翻译：', ''),
-                    audio: item.querySelector('audio') ? item.querySelector('audio').src : ''
+                const sentence = item.querySelector('h3').textContent;
+                const translation = item.querySelector('.translation').textContent.replace('翻译：', '');
+                const audioData = item.querySelector('.audio-data')?.value || '';
+
+                practiceItems.push({
+                    sentence,
+                    translation,
+                    audio: audioData
                 });
             });
 
-            if (items.length === 0) {
+            if (practiceItems.length === 0) {
                 alert('请先添加练习项！');
                 return;
             }
 
             try {
-                const res = await fetch(`${appState.kvConfig.url}/set/${appState.shareId}`, {
+                const response = await fetch(`${appState.kvConfig.url}/set/${appState.shareId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ value: JSON.stringify(items) })
+                    body: JSON.stringify({
+                        value: JSON.stringify(practiceItems),
+                        ex: 86400 * 7 // 保存7天
+                    })
                 });
-                const data = await res.json();
-                if (data.success) {
-                    const link = `${window.location.origin}?shareId=${appState.shareId}`;
-                    elements.studentLinkInput.value = link;
-                    alert('保存成功！');
+
+                const result = await response.json();
+                if (result.success) {
+                    const studentLink = `${window.location.origin}?shareId=${appState.shareId}`;
+                    elements.studentLinkInput.value = studentLink;
+                    alert('所有练习项（含音频）已保存到云端！');
                 }
-            } catch (e) {
-                alert('保存失败：' + e.message);
+            } catch (error) {
+                alert(`云端保存失败：${error.message}`);
             }
         }
 
-        // 复制链接
+        /**
+         * 复制学生访问链接
+         */
         function copyLink() {
             const link = elements.studentLinkInput.value;
             if (!link) {
-                alert('请先保存到云端！');
+                alert('请先保存到云端生成链接！');
                 return;
             }
             elements.studentLinkInput.select();
             document.execCommand('copy');
-            alert('链接已复制！');
+            alert('学生访问链接已复制到剪贴板！');
         }
-
-        // 启动
-        init();
     </script>
 </body>
 </html>
