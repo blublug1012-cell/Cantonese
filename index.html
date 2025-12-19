@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>粤语纠音练习工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft YaHei", sans-serif;
+        }
+
+        body {
+            max-width: 1000px;
+            margin: 20px auto;
+            padding: 0 20px;
+            background-color: #f5f7fa;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 24px;
+        }
+
+        /* 老师模式专属样式：默认显示，学生模式隐藏 */
+        .teacher-only {
+            display: block;
+        }
+
+        /* 学生模式专属样式：默认隐藏，学生模式显示 */
+        .student-only {
+            display: none;
+        }
+
+        .input-section {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        #cantonese-input {
+            flex: 1;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            min-width: 200px;
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        #add-btn {
+            padding: 12px 25px;
+            background-color: #4299e1;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            white-space: nowrap;
+            align-self: flex-start;
+        }
+
+        #add-btn:hover {
+            background-color: #3182ce;
+        }
+
+        .share-section {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        #share-link {
+            flex: 1;
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            min-width: 200px;
+        }
+
+        #copy-link-btn {
+            padding: 10px 20px;
+            background-color: #48bb78;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+
+        #copy-link-btn:hover {
+            background-color: #38a169;
+        }
+
+        .word-list {
+            margin-bottom: 30px;
+        }
+
+        .word-item {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 15px;
+            border: 1px solid #eee;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            background-color: #fafafa;
+        }
+
+        .sentence-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .sentence-text {
+            flex: 1;
+            font-size: 18px;
+            color: #2d3748;
+            padding: 8px;
+        }
+
+        .audio-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .record-btn, .play-btn, .stop-btn {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .record-btn {
+            background-color: #e53e3e;
+            color: white;
+        }
+
+        .stop-btn {
+            background-color: #ed8936;
+            color: white;
+        }
+
+        .play-btn {
+            background-color: #48bb78;
+            color: white;
+        }
+
+        /* 学生模式隐藏删除按钮 */
+        .student-mode .delete-btn {
+            display: none;
+        }
+
+        .delete-btn {
+            padding: 8px 15px;
+            background-color: #718096;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .delete-btn:hover {
+            background-color: #4a5568;
+        }
+
+        .translation-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .translation-label {
+            font-size: 14px;
+            color: #718096;
+            white-space: nowrap;
+            margin-top: 8px;
+        }
+
+        .translation-input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            min-height: 40px;
+        }
+
+        .export-section {
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        #export-pdf-btn {
+            padding: 12px 30px;
+            background-color: #9f7aea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        #export-pdf-btn:hover {
+            background-color: #805ad5;
+        }
+
+        audio {
+            margin-top: 5px;
+            width: 100%;
+        }
+
+        .status-text {
+            font-size: 14px;
+            color: #718096;
+            margin-top: 5px;
+        }
+
+        .tip-text {
+            font-size: 12px;
+            color: #9f7aea;
+            margin-top: 5px;
+            text-align: center;
+        }
+
+        /* PDF导出专用容器：隐藏多余元素，只保留纯文本内容 */
+        #pdf-container {
+            display: none;
+            padding: 20px;
+            font-family: "Microsoft YaHei", sans-serif;
+        }
+        #pdf-container .pdf-title {
+            font-size: 22px;
+            text-align: center;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        #pdf-container .pdf-time {
+            font-size: 14px;
+            text-align: center;
+            margin-bottom: 30px;
+            color: #666;
+        }
+        #pdf-container .pdf-item {
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        #pdf-container .pdf-sentence {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        #pdf-container .pdf-translation {
+            font-size: 14px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="main-container">
+        <h1 id="page-title">粤语纠音练习工具</h1>
+
+        <!-- 老师专属：输入区域 -->
+        <div class="input-section teacher-only">
+            <textarea id="cantonese-input" placeholder="输入需要纠音的粤语词句，每行一句..."></textarea>
+            <button id="add-btn">批量添加词句</button>
+        </div>
+
+        <!-- 老师专属：分享区域 -->
+        <div class="share-section teacher-only">
+            <input type="text" id="share-link" readonly placeholder="生成的学生短链接会显示在这里...">
+            <button id="copy-link-btn">复制学生链接</button>
+        </div>
+
+        <!-- 公共：词句列表 -->
+        <div class="word-list" id="word-list">
+            <!-- 动态生成的词句项会在这里显示 -->
+        </div>
+
+        <!-- 公共：导出PDF区域 -->
+        <div class="export-section">
+            <button id="export-pdf-btn">导出PDF练习册</button>
+            <p class="tip-text">提示：PDF包含所有粤语词句和对应的翻译，录音暂不支持导出</p>
+        </div>
+    </div>
+
+    <!-- PDF导出专用容器（隐藏） -->
+    <div id="pdf-container">
+        <div class="pdf-title">粤语纠音练习册</div>
+        <div class="pdf-time" id="pdf-time"></div>
+        <div id="pdf-content"></div>
+    </div>
+
+    <!-- 引入依赖库（优先国内CDN，避免加载失败） -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <script>
+        // 全局变量
+        let recorders = new Map();
+        let audioBlobs = new Map();
+        let currentShareId = '';
+        let isStudentMode = false; // 是否为学生模式
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            // 1. 判断模式：解析URL参数，带role=student则为学生模式
+            const urlParams = new URLSearchParams(window.location.search);
+            const role = urlParams.get('role');
+            const shareId = urlParams.get('id');
+            isStudentMode = role === 'student';
+
+            // 2. 切换老师/学生模式界面
+            switchMode();
+
+            // 3. 初始化事件监听
+            initEventListeners();
+
+            // 4. 学生模式：加载分享内容；老师模式：正常初始化
+            if (isStudentMode && shareId) {
+                loadSharedContent(shareId);
+            }
+        });
+
+        /**
+         * 切换老师/学生模式界面
+         */
+        function switchMode() {
+            const mainContainer = document.getElementById('main-container');
+            const pageTitle = document.getElementById('page-title');
+            const teacherElements = document.querySelectorAll('.teacher-only');
+            const studentElements = document.querySelectorAll('.student-only');
+
+            if (isStudentMode) {
+                // 学生模式：隐藏老师功能，显示学生专属样式
+                mainContainer.classList.add('student-mode');
+                pageTitle.textContent = '粤语纠音练习册';
+                teacherElements.forEach(el => el.style.display = 'none');
+                studentElements.forEach(el => el.style.display = 'block');
+            } else {
+                // 老师模式：显示所有编辑功能
+                mainContainer.classList.remove('student-mode');
+                pageTitle.textContent = '粤语纠音练习工具（老师编辑版）';
+                teacherElements.forEach(el => el.style.display = 'flex');
+                studentElements.forEach(el => el.style.display = 'none');
+            }
+        }
+
+        /**
+         * 初始化所有事件监听
+         */
+        function initEventListeners() {
+            const addBtn = document.getElementById('add-btn');
+            const input = document.getElementById('cantonese-input');
+            const exportPdfBtn = document.getElementById('export-pdf-btn');
+            const copyLinkBtn = document.getElementById('copy-link-btn');
+
+            // 老师模式：批量添加词句
+            if (!isStudentMode) {
+                addBtn?.addEventListener('click', addWordItems);
+                input?.addEventListener('keypress', (e) => {
+                    if (e.ctrlKey && e.key === 'Enter') addWordItems();
+                });
+                copyLinkBtn?.addEventListener('click', copyShareLink);
+            }
+
+            // 公共：导出PDF（老师/学生都可用）
+            exportPdfBtn.addEventListener('click', exportToPdf);
+        }
+
+        /**
+         * 老师模式：批量添加词句项（按行分割）
+         */
+        function addWordItems() {
+            const input = document.getElementById('cantonese-input');
+            const textContent = input.value.trim();
+            
+            if (!textContent) {
+                alert('请输入需要纠音的粤语词句！');
+                return;
+            }
+
+            // 按换行符分割，过滤空行
+            const sentences = textContent.split(/\r?\n/)
+                .map(s => s.trim())
+                .filter(s => s !== '');
+            
+            if (sentences.length === 0) {
+                alert('输入内容为空，请检查！');
+                return;
+            }
+
+            const wordList = document.getElementById('word-list');
+            sentences.forEach(sentence => {
+                const itemId = generateShortId(8);
+                const item = createWordItem(itemId, sentence, '');
+                wordList.appendChild(item);
+            });
+
+            // 清空输入框
+            input.value = '';
+            input.focus();
+
+            // 生成学生专用短链接
+            generateStudentShareLink();
+
+            alert(`成功添加 ${sentences.length} 个词句项！`);
+        }
+
+        /**
+         * 创建单个词句项DOM
+         */
+        function createWordItem(itemId, sentence, translation) {
+            const item = document.createElement('div');
+            item.className = 'word-item';
+            item.id = itemId;
+
+            item.innerHTML = `
+                <div class="sentence-row">
+                    <div class="sentence-text">${sentence}</div>
+                    <div class="audio-controls">
+                        <button class="record-btn" onclick="startRecording('${itemId}')">录制</button>
+                        <button class="stop-btn" onclick="stopRecording('${itemId}')" style="display:none;">停止</button>
+                        <button class="play-btn" onclick="playRecording('${itemId}')" style="display:none;">播放</button>
+                    </div>
+                    <button class="delete-btn" onclick="deleteItem('${itemId}')">删除</button>
+                </div>
+                <div class="translation-row">
+                    <span class="translation-label">翻译（普通话/英文）：</span>
+                    <textarea class="translation-input" id="translation-${itemId}" placeholder="请输入对应的翻译内容...">${translation}</textarea>
+                </div>
+                <div class="status-text" id="status-${itemId}"></div>
+                <audio id="audio-${itemId}" controls style="display:none;"></audio>
+            `;
+            return item;
+        }
+
+        /**
+         * 录音相关功能（老师/学生都可用）
+         */
+        async function startRecording(itemId) {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const recorder = new MediaRecorder(stream);
+                const audioChunks = [];
+
+                recorder.ondataavailable = (e) => audioChunks.push(e.data);
+                recorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
+                    audioBlobs.set(itemId, audioBlob);
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    document.getElementById(`audio-${itemId}`).src = audioUrl;
+                    document.getElementById(`status-${itemId}`).textContent = '录音完成，可点击播放按钮试听';
+                };
+
+                recorders.set(itemId, recorder);
+                recorder.start();
+
+                // 更新按钮状态
+                const controls = document.querySelector(`#${itemId} .audio-controls`);
+                controls.querySelector('.record-btn').style.display = 'none';
+                controls.querySelector('.stop-btn').style.display = 'inline-block';
+                controls.querySelector('.play-btn').style.display = 'none';
+                document.getElementById(`status-${itemId}`).textContent = '正在录音中...（点击停止按钮结束）';
+
+            } catch (error) {
+                alert('录音权限被拒绝！请允许麦克风权限后重试。');
+                console.error('录音错误：', error);
+            }
+        }
+        function stopRecording(itemId) {
+            const recorder = recorders.get(itemId);
+            if (recorder && recorder.state === 'recording') {
+                recorder.stop();
+                recorder.stream.getTracks().forEach(track => track.stop());
+                
+                const controls = document.querySelector(`#${itemId} .audio-controls`);
+                controls.querySelector('.record-btn').style.display = 'inline-block';
+                controls.querySelector('.stop-btn').style.display = 'none';
+                controls.querySelector('.play-btn').style.display = 'inline-block';
+            }
+        }
+        function playRecording(itemId) {
+            const audioElement = document.getElementById(`audio-${itemId}`);
+            if (audioElement.src) {
+                audioElement.play();
+                document.getElementById(`status-${itemId}`).textContent = '正在播放录音...';
+            } else {
+                alert('暂无录音数据，请先录制！');
+            }
+        }
+        function deleteItem(itemId) {
+            if (confirm('确定要删除这个词句项吗？')) {
+                recorders.delete(itemId);
+                audioBlobs.delete(itemId);
+                document.getElementById(itemId).remove();
+                // 老师模式：删除后重新生成分享链接
+                if (!isStudentMode) generateStudentShareLink();
+            }
+        }
+
+        /**
+         * 彻底解决PDF乱码：用html2canvas转图片导出
+         */
+        function exportToPdf() {
+            const wordItems = document.querySelectorAll('.word-item');
+            if (wordItems.length === 0) {
+                alert('暂无需要导出的内容，请先添加词句！');
+                return;
+            }
+
+            // 1. 构建PDF专用纯文本容器（避免样式干扰，彻底解决乱码）
+            const pdfContainer = document.getElementById('pdf-container');
+            const pdfContent = document.getElementById('pdf-content');
+            const pdfTime = document.getElementById('pdf-time');
+            
+            // 清空PDF容器
+            pdfContent.innerHTML = '';
+            // 设置时间
+            pdfTime.textContent = `生成时间：${new Date().toLocaleString()}`;
+
+            // 2. 填充PDF内容（纯文本，无复杂样式）
+            wordItems.forEach((item, index) => {
+                const sentence = item.querySelector('.sentence-text').textContent;
+                const translationId = `translation-${item.id}`;
+                const translation = document.getElementById(translationId).value || '暂无翻译';
+
+                const pdfItem = document.createElement('div');
+                pdfItem.className = 'pdf-item';
+                pdfItem.innerHTML = `
+                    <div class="pdf-sentence">【${index + 1}】粤语：${sentence}</div>
+                    <div class="pdf-translation">翻译：${translation}</div>
+                `;
+                pdfContent.appendChild(pdfItem);
+            });
+
+            // 3. 显示PDF容器（临时），用于截图
+            pdfContainer.style.display = 'block';
+
+            // 4. 使用html2canvas截图，彻底避免字体乱码
+            html2canvas(pdfContainer, {
+                scale: 2, // 2倍分辨率，保证PDF清晰
+                useCORS: true,
+                logging: false
+            }).then(canvas => {
+                // 5. 转为PDF
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF({
+                    orientation: 'portrait',
+                    unit: 'mm',
+                    format: 'a4'
+                });
+
+                // 计算画布尺寸适配A4
+                const imgWidth = 210; // A4宽度
+                const imgHeight = canvas.height * imgWidth / canvas.width;
+
+                // 添加图片到PDF
+                pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgWidth, imgHeight);
+                // 保存PDF
+                pdf.save('粤语纠音练习册.pdf');
+
+                // 6. 隐藏PDF容器
+                pdfContainer.style.display = 'none';
+            });
+        }
+
+        /**
+         * 生成短ID（6位，控制链接长度）
+         */
+        function generateShortId(length = 6) {
+            const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+            let id = '';
+            for (let i = 0; i < length; i++) {
+                id += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return id;
+        }
+
+        /**
+         * 生成学生专用短链接（自动带role=student参数）
+         */
+        function generateStudentShareLink() {
+            const content = collectAllContent();
+            if (!content || content.items.length === 0) {
+                document.getElementById('share-link').value = '暂无内容可分享';
+                return;
+            }
+
+            // 生成/复用短ID
+            if (!currentShareId) {
+                currentShareId = generateShortId(6);
+            }
+
+            // 存储内容到localStorage
+            localStorage.setItem(`yueyu_${currentShareId}`, JSON.stringify(content));
+
+            // 生成学生链接：带role=student参数，打开即为学生模式
+            const baseUrl = window.location.href.split('?')[0];
+            const studentLink = `${baseUrl}?id=${currentShareId}&role=student`;
+
+            // 显示链接
+            document.getElementById('share-link').value = studentLink;
+        }
+
+        /**
+         * 复制学生链接到剪贴板
+         */
+        function copyShareLink() {
+            const shareLinkInput = document.getElementById('share-link');
+            const link = shareLinkInput.value;
+
+            if (link === '暂无内容可分享' || !link) {
+                alert('暂无可复制的链接！');
+                return;
+            }
+
+            shareLinkInput.select();
+            document.execCommand('copy');
+            alert('学生专用链接已复制到剪贴板！学生打开后仅能查看/练习/导出PDF');
+        }
+
+        /**
+         * 收集所有内容（词句+翻译）
+         */
+        function collectAllContent() {
+            const items = [];
+            const wordItems = document.querySelectorAll('.word-item');
+            
+            wordItems.forEach(item => {
+                const sentence = item.querySelector('.sentence-text').textContent;
+                const translationId = `translation-${item.id}`;
+                const translation = document.getElementById(translationId).value || '';
+                
+                items.push({
+                    sentence: sentence,
+                    translation: translation
+                });
+            });
+
+            return {
+                items: items,
+                createTime: new Date().toLocaleString()
+            };
+        }
+
+        /**
+         * 加载分享内容（学生模式专用）
+         */
+        function loadSharedContent(shareId) {
+            const contentStr = localStorage.getItem(`yueyu_${shareId}`);
+            if (!contentStr) {
+                alert('未找到对应的练习内容！');
+                return;
+            }
+
+            const content = JSON.parse(contentStr);
+            if (!content || !content.items || content.items.length === 0) return;
+
+            // 清空现有列表
+            const wordList = document.getElementById('word-list');
+            wordList.innerHTML = '';
+
+            // 加载内容（学生模式无删除按钮）
+            content.items.forEach(item => {
+                const itemId = generateShortId(8);
+                const newItem = createWordItem(itemId, item.sentence, item.translation);
+                wordList.appendChild(newItem);
+            });
+        }
+    </script>
+</body>
+</html>
