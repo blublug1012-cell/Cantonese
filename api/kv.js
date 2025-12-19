@@ -1,55 +1,61 @@
-// api/kv.js - Vercel Serverless代理Redis请求，解决跨域问题
+// api/kv.js - 修复JSON响应格式
 export default async function handler(req, res) {
-  // 允许所有跨域请求（适配前端调用）
+  // 强制设置响应为JSON格式
+  res.setHeader('Content-Type', 'application/json');
+  // 允许跨域
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   // 处理OPTIONS预检请求
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    return res.status(200).json({ success: true });
   }
 
-  // 获取Vercel环境变量中的Redis配置
+  // 读取环境变量
   const { KV_REST_API_URL, KV_REST_API_TOKEN } = process.env;
-  
-  // 校验配置是否存在
   if (!KV_REST_API_URL || !KV_REST_API_TOKEN) {
     return res.status(500).json({ 
       success: false, 
-      error: 'Vercel KV配置未找到，请检查环境变量' 
+      error: 'KV环境变量未配置' 
     });
   }
 
   try {
-    // 拼接完整的Redis REST API地址
-    const redisApiUrl = `${KV_REST_API_URL}${req.url}`;
-    
-    // 转发请求到Redis KV
-    const response = await fetch(redisApiUrl, {
+    // 拼接Redis API地址（修复URL格式）
+    const redisUrl = new URL(KV_REST_API_URL);
+    const fullUrl = new URL(req.url, redisUrl).href;
+
+    // 发送请求到Redis
+    const response = await fetch(fullUrl, {
       method: req.method,
       headers: {
         'Authorization': `Bearer ${KV_REST_API_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined
+      body: req.method === 'POST' ? JSON.stringify(req.body) : null
     });
 
-    // 获取Redis返回结果
-    const data = await response.json();
-    
-    // 转发响应给前端
-    res.status(response.status).json({
-      success: true,
-      data: data
+    // 读取Redis响应（确保是JSON）
+    const responseText = await response.text();
+    let responseData;
+    try {
+      responseData = JSON.parse(responseText);
+    } catch (parseErr) {
+      // 若Redis返回非JSON，包装为JSON
+      responseData = { raw: responseText };
+    }
+
+    return res.status(response.status).json({
+      success: response.ok,
+      data: responseData
     });
   } catch (error) {
-    // 捕获错误并返回给前端
-    res.status(500).json({
+    // 捕获所有错误，返回JSON
+    return res.status(500).json({
       success: false,
-      error: 'Redis请求失败',
-      details: error.message
+      error: error.message,
+      details: error.stack
     });
   }
 }
