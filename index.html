@@ -33,9 +33,9 @@
             font-size: 24px;
         }
 
-        /* 老师模式专属样式：默认显示，学生模式隐藏 */
+        /* 老师模式专属：默认显示，学生模式隐藏 */
         .teacher-only {
-            display: block;
+            display: flex;
         }
 
         /* 学生模式专属样式：默认隐藏，学生模式显示 */
@@ -44,7 +44,6 @@
         }
 
         .input-section {
-            display: flex;
             gap: 10px;
             margin-bottom: 30px;
             flex-wrap: wrap;
@@ -78,7 +77,6 @@
         }
 
         .share-section {
-            display: flex;
             gap: 10px;
             margin-bottom: 20px;
             flex-wrap: wrap;
@@ -143,7 +141,8 @@
             gap: 8px;
         }
 
-        .record-btn, .play-btn, .stop-btn {
+        /* 老师模式：显示所有音频按钮 */
+        .record-btn, .teacher-stop-btn, .teacher-play-btn {
             padding: 8px 15px;
             border: none;
             border-radius: 4px;
@@ -156,19 +155,28 @@
             color: white;
         }
 
-        .stop-btn {
+        .teacher-stop-btn {
             background-color: #ed8936;
             color: white;
         }
 
-        .play-btn {
+        .teacher-play-btn {
             background-color: #48bb78;
             color: white;
         }
 
+        /* 学生模式：只显示播放按钮，隐藏录制/停止，且播放按钮样式调整 */
+        .student-mode .record-btn, 
+        .student-mode .teacher-stop-btn {
+            display: none !important;
+        }
+        .student-mode .teacher-play-btn {
+            background-color: #4299e1;
+        }
+
         /* 学生模式隐藏删除按钮 */
         .student-mode .delete-btn {
-            display: none;
+            display: none !important;
         }
 
         .delete-btn {
@@ -196,6 +204,14 @@
             color: #718096;
             white-space: nowrap;
             margin-top: 8px;
+        }
+
+        /* 学生模式：翻译框只读，不能修改 */
+        .student-mode .translation-input {
+            background-color: #f8f8f8;
+            cursor: not-allowed;
+            border-color: #eee;
+            pointer-events: none;
         }
 
         .translation-input {
@@ -280,7 +296,7 @@
 </head>
 <body>
     <div class="container" id="main-container">
-        <h1 id="page-title">粤语纠音练习工具</h1>
+        <h1 id="page-title">粤语纠音练习工具（老师编辑版）</h1>
 
         <!-- 老师专属：输入区域 -->
         <div class="input-section teacher-only">
@@ -302,7 +318,7 @@
         <!-- 公共：导出PDF区域 -->
         <div class="export-section">
             <button id="export-pdf-btn">导出PDF练习册</button>
-            <p class="tip-text">提示：PDF包含所有粤语词句和对应的翻译，录音暂不支持导出</p>
+            <p class="tip-text">提示：PDF包含所有粤语词句和对应的翻译，老师录音暂不支持导出</p>
         </div>
     </div>
 
@@ -313,20 +329,20 @@
         <div id="pdf-content"></div>
     </div>
 
-    <!-- 引入依赖库（优先国内CDN，避免加载失败） -->
+    <!-- 引入依赖库（优先国内CDN） -->
     <script src="https://cdn.bootcdn.net/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdn.bootcdn.net/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
     <script>
         // 全局变量
-        let recorders = new Map();
-        let audioBlobs = new Map();
+        let activeRecorders = new Map(); // 活跃的录音对象（避免重复占用）
+        let audioData = new Map(); // 存储音频base64数据（key: itemId, value: base64字符串）
         let currentShareId = '';
         let isStudentMode = false; // 是否为学生模式
 
         // 页面加载完成后初始化
         document.addEventListener('DOMContentLoaded', () => {
-            // 1. 判断模式：解析URL参数，带role=student则为学生模式
+            // 1. 判断模式：解析URL参数
             const urlParams = new URLSearchParams(window.location.search);
             const role = urlParams.get('role');
             const shareId = urlParams.get('id');
@@ -351,20 +367,17 @@
             const mainContainer = document.getElementById('main-container');
             const pageTitle = document.getElementById('page-title');
             const teacherElements = document.querySelectorAll('.teacher-only');
-            const studentElements = document.querySelectorAll('.student-only');
 
             if (isStudentMode) {
                 // 学生模式：隐藏老师功能，显示学生专属样式
                 mainContainer.classList.add('student-mode');
-                pageTitle.textContent = '粤语纠音练习册';
+                pageTitle.textContent = '粤语纠音练习册（学生跟读版）';
                 teacherElements.forEach(el => el.style.display = 'none');
-                studentElements.forEach(el => el.style.display = 'block');
             } else {
                 // 老师模式：显示所有编辑功能
                 mainContainer.classList.remove('student-mode');
                 pageTitle.textContent = '粤语纠音练习工具（老师编辑版）';
                 teacherElements.forEach(el => el.style.display = 'flex');
-                studentElements.forEach(el => el.style.display = 'none');
             }
         }
 
@@ -415,7 +428,7 @@
             const wordList = document.getElementById('word-list');
             sentences.forEach(sentence => {
                 const itemId = generateShortId(8);
-                const item = createWordItem(itemId, sentence, '');
+                const item = createWordItem(itemId, sentence, '', '');
                 wordList.appendChild(item);
             });
 
@@ -431,19 +444,27 @@
 
         /**
          * 创建单个词句项DOM
+         * @param {string} itemId 项ID
+         * @param {string} sentence 粤语词句
+         * @param {string} translation 翻译
+         * @param {string} audioBase64 音频base64（可选）
          */
-        function createWordItem(itemId, sentence, translation) {
+        function createWordItem(itemId, sentence, translation, audioBase64 = '') {
             const item = document.createElement('div');
             item.className = 'word-item';
             item.id = itemId;
+
+            // 音频URL（学生模式直接用base64，老师模式动态生成）
+            let audioSrc = audioBase64 ? `data:audio/mpeg;base64,${audioBase64}` : '';
+            let playBtnStyle = audioBase64 ? 'display:inline-block' : 'display:none'; // 有音频则显示播放按钮
 
             item.innerHTML = `
                 <div class="sentence-row">
                     <div class="sentence-text">${sentence}</div>
                     <div class="audio-controls">
-                        <button class="record-btn" onclick="startRecording('${itemId}')">录制</button>
-                        <button class="stop-btn" onclick="stopRecording('${itemId}')" style="display:none;">停止</button>
-                        <button class="play-btn" onclick="playRecording('${itemId}')" style="display:none;">播放</button>
+                        <button class="record-btn" onclick="startRecording('${itemId}')">老师录制</button>
+                        <button class="teacher-stop-btn" onclick="stopRecording('${itemId}')" style="display:none;">停止录制</button>
+                        <button class="teacher-play-btn" onclick="playTeacherAudio('${itemId}')" style="${playBtnStyle}">播放老师发音</button>
                     </div>
                     <button class="delete-btn" onclick="deleteItem('${itemId}')">删除</button>
                 </div>
@@ -452,77 +473,167 @@
                     <textarea class="translation-input" id="translation-${itemId}" placeholder="请输入对应的翻译内容...">${translation}</textarea>
                 </div>
                 <div class="status-text" id="status-${itemId}"></div>
-                <audio id="audio-${itemId}" controls style="display:none;"></audio>
+                <audio id="audio-${itemId}" controls style="display:none;" src="${audioSrc}"></audio>
             `;
             return item;
         }
 
         /**
-         * 录音相关功能（老师/学生都可用）
+         * 优化版录音功能：彻底解决权限被拒、录几句就停的问题
          */
         async function startRecording(itemId) {
+            // 1. 先停止当前项的已有录音（避免冲突）
+            if (activeRecorders.has(itemId)) {
+                stopRecording(itemId);
+            }
+
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const recorder = new MediaRecorder(stream);
+                // 2. 请求麦克风权限（强制重新请求，避免缓存问题）
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { 
+                        echoCancellation: true, // 回声消除
+                        noiseSuppression: true // 降噪
+                    } 
+                });
+
+                // 3. 创建MediaRecorder（指定编码格式，提高兼容性）
+                const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+                    ? 'audio/webm;codecs=opus' 
+                    : 'audio/mpeg';
+                const recorder = new MediaRecorder(stream, { mimeType });
+                
                 const audioChunks = [];
 
-                recorder.ondataavailable = (e) => audioChunks.push(e.data);
-                recorder.onstop = () => {
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
-                    audioBlobs.set(itemId, audioBlob);
-                    const audioUrl = URL.createObjectURL(audioBlob);
-                    document.getElementById(`audio-${itemId}`).src = audioUrl;
-                    document.getElementById(`status-${itemId}`).textContent = '录音完成，可点击播放按钮试听';
+                // 4. 监听数据可用
+                recorder.ondataavailable = (e) => {
+                    if (e.data.size > 0) {
+                        audioChunks.push(e.data);
+                    }
                 };
 
-                recorders.set(itemId, recorder);
+                // 5. 监听录音停止：转base64存储
+                recorder.onstop = async () => {
+                    // 彻底停止所有媒体轨道
+                    stream.getTracks().forEach(track => {
+                        track.stop();
+                    });
+
+                    if (audioChunks.length === 0) {
+                        document.getElementById(`status-${itemId}`).textContent = '录音内容为空，请重新录制';
+                        return;
+                    }
+
+                    // 转Blob为base64（便于存储和分享）
+                    const audioBlob = new Blob(audioChunks, { type: mimeType });
+                    const base64 = await blobToBase64(audioBlob);
+                    
+                    // 存储base64数据
+                    audioData.set(itemId, base64);
+
+                    // 更新音频元素
+                    const audioElement = document.getElementById(`audio-${itemId}`);
+                    audioElement.src = `data:${mimeType};base64,${base64}`;
+                    
+                    // 显示播放按钮
+                    document.querySelector(`#${itemId} .teacher-play-btn`).style.display = 'inline-block';
+                    document.getElementById(`status-${itemId}`).textContent = '老师录音完成，可点击播放按钮试听';
+
+                    // 移除活跃录音记录
+                    activeRecorders.delete(itemId);
+
+                    // 重新生成分享链接（包含新录音）
+                    generateStudentShareLink();
+                };
+
+                // 6. 存储活跃录音对象
+                activeRecorders.set(itemId, { recorder, stream });
+
+                // 7. 开始录音
                 recorder.start();
 
-                // 更新按钮状态
+                // 8. 更新按钮状态
                 const controls = document.querySelector(`#${itemId} .audio-controls`);
                 controls.querySelector('.record-btn').style.display = 'none';
-                controls.querySelector('.stop-btn').style.display = 'inline-block';
-                controls.querySelector('.play-btn').style.display = 'none';
-                document.getElementById(`status-${itemId}`).textContent = '正在录音中...（点击停止按钮结束）';
+                controls.querySelector('.teacher-stop-btn').style.display = 'inline-block';
+                controls.querySelector('.teacher-play-btn').style.display = 'none';
+                
+                document.getElementById(`status-${itemId}`).textContent = '正在录制老师发音...（点击停止录制结束）';
 
             } catch (error) {
-                alert('录音权限被拒绝！请允许麦克风权限后重试。');
                 console.error('录音错误：', error);
+                // 更友好的权限提示
+                alert(`录音权限被拒绝！请按以下步骤操作：
+1. 点击浏览器地址栏左侧的"锁形/感叹号"图标
+2. 找到"麦克风"权限，设置为"允许"
+3. 刷新页面后重新录制`);
             }
         }
+
+        /**
+         * 停止录音
+         */
         function stopRecording(itemId) {
-            const recorder = recorders.get(itemId);
-            if (recorder && recorder.state === 'recording') {
-                recorder.stop();
-                recorder.stream.getTracks().forEach(track => track.stop());
+            const activeRecord = activeRecorders.get(itemId);
+            if (activeRecord && activeRecord.recorder.state === 'recording') {
+                // 停止录音
+                activeRecord.recorder.stop();
+                // 停止媒体流（关键：释放麦克风）
+                activeRecord.stream.getTracks().forEach(track => track.stop());
                 
+                // 更新按钮状态
                 const controls = document.querySelector(`#${itemId} .audio-controls`);
                 controls.querySelector('.record-btn').style.display = 'inline-block';
-                controls.querySelector('.stop-btn').style.display = 'none';
-                controls.querySelector('.play-btn').style.display = 'inline-block';
+                controls.querySelector('.teacher-stop-btn').style.display = 'none';
             }
         }
-        function playRecording(itemId) {
+
+        /**
+         * 播放老师的录音（老师/学生都可用）
+         */
+        function playTeacherAudio(itemId) {
             const audioElement = document.getElementById(`audio-${itemId}`);
             if (audioElement.src) {
-                audioElement.play();
-                document.getElementById(`status-${itemId}`).textContent = '正在播放录音...';
+                audioElement.play().catch(error => {
+                    console.error('播放错误：', error);
+                    alert('播放失败！请检查音频是否正常录制。');
+                });
+                document.getElementById(`status-${itemId}`).textContent = '正在播放老师的标准发音...';
             } else {
-                alert('暂无录音数据，请先录制！');
+                alert('暂无老师录音，请先录制！');
             }
         }
+
+        /**
+         * 删除词句项
+         */
         function deleteItem(itemId) {
-            if (confirm('确定要删除这个词句项吗？')) {
-                recorders.delete(itemId);
-                audioBlobs.delete(itemId);
+            if (confirm('确定要删除这个词句项吗？删除后录音和翻译也会被移除！')) {
+                // 停止该项目的录音（如果正在录制）
+                stopRecording(itemId);
+                // 移除音频数据
+                audioData.delete(itemId);
+                activeRecorders.delete(itemId);
+                // 移除DOM元素
                 document.getElementById(itemId).remove();
-                // 老师模式：删除后重新生成分享链接
+                // 重新生成分享链接
                 if (!isStudentMode) generateStudentShareLink();
             }
         }
 
         /**
-         * 彻底解决PDF乱码：用html2canvas转图片导出
+         * Blob转Base64（用于存储音频）
+         */
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        /**
+         * 导出PDF（无乱码）
          */
         function exportToPdf() {
             const wordItems = document.querySelectorAll('.word-item');
@@ -531,17 +642,15 @@
                 return;
             }
 
-            // 1. 构建PDF专用纯文本容器（避免样式干扰，彻底解决乱码）
+            // 构建PDF专用容器
             const pdfContainer = document.getElementById('pdf-container');
             const pdfContent = document.getElementById('pdf-content');
             const pdfTime = document.getElementById('pdf-time');
             
-            // 清空PDF容器
             pdfContent.innerHTML = '';
-            // 设置时间
             pdfTime.textContent = `生成时间：${new Date().toLocaleString()}`;
 
-            // 2. 填充PDF内容（纯文本，无复杂样式）
+            // 填充内容
             wordItems.forEach((item, index) => {
                 const sentence = item.querySelector('.sentence-text').textContent;
                 const translationId = `translation-${item.id}`;
@@ -556,16 +665,13 @@
                 pdfContent.appendChild(pdfItem);
             });
 
-            // 3. 显示PDF容器（临时），用于截图
+            // 显示容器并截图
             pdfContainer.style.display = 'block';
-
-            // 4. 使用html2canvas截图，彻底避免字体乱码
             html2canvas(pdfContainer, {
-                scale: 2, // 2倍分辨率，保证PDF清晰
+                scale: 2,
                 useCORS: true,
                 logging: false
             }).then(canvas => {
-                // 5. 转为PDF
                 const { jsPDF } = window.jspdf;
                 const pdf = new jsPDF({
                     orientation: 'portrait',
@@ -573,22 +679,18 @@
                     format: 'a4'
                 });
 
-                // 计算画布尺寸适配A4
-                const imgWidth = 210; // A4宽度
+                const imgWidth = 210;
                 const imgHeight = canvas.height * imgWidth / canvas.width;
-
-                // 添加图片到PDF
                 pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgWidth, imgHeight);
-                // 保存PDF
                 pdf.save('粤语纠音练习册.pdf');
 
-                // 6. 隐藏PDF容器
+                // 隐藏容器
                 pdfContainer.style.display = 'none';
             });
         }
 
         /**
-         * 生成短ID（6位，控制链接长度）
+         * 生成短ID
          */
         function generateShortId(length = 6) {
             const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -600,7 +702,7 @@
         }
 
         /**
-         * 生成学生专用短链接（自动带role=student参数）
+         * 生成学生专用短链接（包含老师录音）
          */
         function generateStudentShareLink() {
             const content = collectAllContent();
@@ -614,10 +716,10 @@
                 currentShareId = generateShortId(6);
             }
 
-            // 存储内容到localStorage
+            // 存储内容到localStorage（包含音频base64）
             localStorage.setItem(`yueyu_${currentShareId}`, JSON.stringify(content));
 
-            // 生成学生链接：带role=student参数，打开即为学生模式
+            // 生成学生链接（带role=student）
             const baseUrl = window.location.href.split('?')[0];
             const studentLink = `${baseUrl}?id=${currentShareId}&role=student`;
 
@@ -626,7 +728,34 @@
         }
 
         /**
-         * 复制学生链接到剪贴板
+         * 收集所有内容（词句+翻译+音频base64）
+         */
+        function collectAllContent() {
+            const items = [];
+            const wordItems = document.querySelectorAll('.word-item');
+            
+            wordItems.forEach(item => {
+                const itemId = item.id;
+                const sentence = item.querySelector('.sentence-text').textContent;
+                const translationId = `translation-${itemId}`;
+                const translation = document.getElementById(translationId).value || '';
+                const audioBase64 = audioData.get(itemId) || '';
+                
+                items.push({
+                    sentence: sentence,
+                    translation: translation,
+                    audioBase64: audioBase64
+                });
+            });
+
+            return {
+                items: items,
+                createTime: new Date().toLocaleString()
+            };
+        }
+
+        /**
+         * 复制学生链接
          */
         function copyShareLink() {
             const shareLinkInput = document.getElementById('share-link');
@@ -639,54 +768,33 @@
 
             shareLinkInput.select();
             document.execCommand('copy');
-            alert('学生专用链接已复制到剪贴板！学生打开后仅能查看/练习/导出PDF');
+            alert('学生专用链接已复制！学生打开后可播放您的录音、查看翻译、导出PDF');
         }
 
         /**
-         * 收集所有内容（词句+翻译）
-         */
-        function collectAllContent() {
-            const items = [];
-            const wordItems = document.querySelectorAll('.word-item');
-            
-            wordItems.forEach(item => {
-                const sentence = item.querySelector('.sentence-text').textContent;
-                const translationId = `translation-${item.id}`;
-                const translation = document.getElementById(translationId).value || '';
-                
-                items.push({
-                    sentence: sentence,
-                    translation: translation
-                });
-            });
-
-            return {
-                items: items,
-                createTime: new Date().toLocaleString()
-            };
-        }
-
-        /**
-         * 加载分享内容（学生模式专用）
+         * 加载分享内容（学生模式）
          */
         function loadSharedContent(shareId) {
             const contentStr = localStorage.getItem(`yueyu_${shareId}`);
             if (!contentStr) {
-                alert('未找到对应的练习内容！');
+                alert('未找到对应的练习内容！可能是链接已过期或内容已被删除。');
                 return;
             }
 
             const content = JSON.parse(contentStr);
-            if (!content || !content.items || content.items.length === 0) return;
+            if (!content || !content.items || content.items.length === 0) {
+                alert('该链接暂无练习内容！');
+                return;
+            }
 
             // 清空现有列表
             const wordList = document.getElementById('word-list');
             wordList.innerHTML = '';
 
-            // 加载内容（学生模式无删除按钮）
+            // 加载内容（学生模式：只显示播放按钮，翻译只读）
             content.items.forEach(item => {
                 const itemId = generateShortId(8);
-                const newItem = createWordItem(itemId, item.sentence, item.translation);
+                const newItem = createWordItem(itemId, item.sentence, item.translation, item.audioBase64);
                 wordList.appendChild(newItem);
             });
         }
