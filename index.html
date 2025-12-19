@@ -141,18 +141,24 @@
             gap: 8px;
         }
 
-        /* 老师模式：显示所有音频按钮 */
+        /* 老师模式：音频按钮样式，增加禁用状态 */
         .record-btn, .teacher-stop-btn, .teacher-play-btn {
             padding: 8px 15px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
             font-size: 14px;
+            transition: opacity 0.2s;
         }
 
         .record-btn {
             background-color: #e53e3e;
             color: white;
+        }
+
+        .record-btn:disabled, .teacher-stop-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
         }
 
         .teacher-stop-btn {
@@ -165,7 +171,7 @@
             color: white;
         }
 
-        /* 学生模式：只显示播放按钮，隐藏录制/停止，且播放按钮样式调整 */
+        /* 学生模式：只显示播放按钮，隐藏录制/停止 */
         .student-mode .record-btn, 
         .student-mode .teacher-stop-btn {
             display: none !important;
@@ -206,7 +212,7 @@
             margin-top: 8px;
         }
 
-        /* 学生模式：翻译框只读，不能修改 */
+        /* 学生模式：翻译框只读 */
         .student-mode .translation-input {
             background-color: #f8f8f8;
             cursor: not-allowed;
@@ -260,7 +266,7 @@
             text-align: center;
         }
 
-        /* PDF导出专用容器：隐藏多余元素，只保留纯文本内容 */
+        /* PDF导出专用容器 */
         #pdf-container {
             display: none;
             padding: 20px;
@@ -334,44 +340,52 @@
     <script src="https://cdn.bootcdn.net/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
     <script>
-        // 全局变量 - 核心改动：复用麦克风流
-        let globalAudioStream = null; // 全局麦克风流（只请求一次）
-        let activeRecorder = null;    // 当前活跃的Recorder（同一时间只允许录一个）
-        let activeItemId = '';        // 当前正在录制的项ID
-        let audioData = new Map();    // 存储音频base64数据（key: itemId, value: base64字符串）
+        // 全局变量 - 核心优化：强化状态管理，避免卡死
+        let globalAudioStream = null;  // 全局麦克风流（只请求一次）
+        let activeRecorder = null;     // 当前活跃的Recorder
+        let activeItemId = '';         // 当前正在录制的项ID
+        let audioData = new Map();     // 音频base64数据（无条数限制）
         let currentShareId = '';
-        let isStudentMode = false;    // 是否为学生模式
+        let isStudentMode = false;
 
-        // 页面加载完成后初始化
+        // 页面加载初始化
         document.addEventListener('DOMContentLoaded', () => {
-            // 1. 判断模式：解析URL参数
+            // 解析模式参数
             const urlParams = new URLSearchParams(window.location.search);
             const role = urlParams.get('role');
             const shareId = urlParams.get('id');
             isStudentMode = role === 'student';
 
-            // 2. 切换老师/学生模式界面
+            // 切换模式
             switchMode();
-
-            // 3. 初始化事件监听
+            // 初始化事件
             initEventListeners();
-
-            // 4. 学生模式：加载分享内容；老师模式：正常初始化
+            // 学生模式加载内容
             if (isStudentMode && shareId) {
                 loadSharedContent(shareId);
             }
 
-            // 页面卸载时释放麦克风流（避免内存泄漏）
+            // 页面卸载：彻底释放资源
             window.addEventListener('beforeunload', () => {
+                // 停止所有录制
+                if (activeRecorder) {
+                    try { activeRecorder.stop(); } catch (e) {}
+                    activeRecorder = null;
+                }
+                // 释放麦克风流
                 if (globalAudioStream) {
-                    globalAudioStream.getTracks().forEach(track => track.stop());
+                    globalAudioStream.getTracks().forEach(track => {
+                        try { track.stop(); } catch (e) {}
+                    });
                     globalAudioStream = null;
                 }
+                // 清空数据
+                audioData.clear();
             });
         });
 
         /**
-         * 切换老师/学生模式界面
+         * 切换老师/学生模式
          */
         function switchMode() {
             const mainContainer = document.getElementById('main-container');
@@ -379,12 +393,10 @@
             const teacherElements = document.querySelectorAll('.teacher-only');
 
             if (isStudentMode) {
-                // 学生模式：隐藏老师功能，显示学生专属样式
                 mainContainer.classList.add('student-mode');
                 pageTitle.textContent = '粤语纠音练习册（学生跟读版）';
                 teacherElements.forEach(el => el.style.display = 'none');
             } else {
-                // 老师模式：显示所有编辑功能
                 mainContainer.classList.remove('student-mode');
                 pageTitle.textContent = '粤语纠音练习工具（老师编辑版）';
                 teacherElements.forEach(el => el.style.display = 'flex');
@@ -392,7 +404,7 @@
         }
 
         /**
-         * 初始化所有事件监听
+         * 初始化事件监听
          */
         function initEventListeners() {
             const addBtn = document.getElementById('add-btn');
@@ -409,12 +421,12 @@
                 copyLinkBtn?.addEventListener('click', copyShareLink);
             }
 
-            // 公共：导出PDF（老师/学生都可用）
+            // 公共：导出PDF
             exportPdfBtn.addEventListener('click', exportToPdf);
         }
 
         /**
-         * 老师模式：批量添加词句项（按行分割）
+         * 批量添加词句（无条数限制）
          */
         function addWordItems() {
             const input = document.getElementById('cantonese-input');
@@ -425,7 +437,7 @@
                 return;
             }
 
-            // 按换行符分割，过滤空行
+            // 按行分割，过滤空行
             const sentences = textContent.split(/\r?\n/)
                 .map(s => s.trim())
                 .filter(s => s !== '');
@@ -446,34 +458,30 @@
             input.value = '';
             input.focus();
 
-            // 生成学生专用短链接
+            // 生成分享链接
             generateStudentShareLink();
 
-            alert(`成功添加 ${sentences.length} 个词句项！`);
+            alert(`成功添加 ${sentences.length} 个词句项！可无限制录制音频`);
         }
 
         /**
-         * 创建单个词句项DOM
-         * @param {string} itemId 项ID
-         * @param {string} sentence 粤语词句
-         * @param {string} translation 翻译
-         * @param {string} audioBase64 音频base64（可选）
+         * 创建词句项DOM（增加按钮禁用逻辑）
          */
         function createWordItem(itemId, sentence, translation, audioBase64 = '') {
             const item = document.createElement('div');
             item.className = 'word-item';
             item.id = itemId;
 
-            // 音频URL（学生模式直接用base64，老师模式动态生成）
+            // 音频URL和播放按钮状态
             let audioSrc = audioBase64 ? `data:audio/mpeg;base64,${audioBase64}` : '';
-            let playBtnStyle = audioBase64 ? 'display:inline-block' : 'display:none'; // 有音频则显示播放按钮
+            let playBtnStyle = audioBase64 ? 'display:inline-block' : 'display:none';
 
             item.innerHTML = `
                 <div class="sentence-row">
                     <div class="sentence-text">${sentence}</div>
                     <div class="audio-controls">
-                        <button class="record-btn" onclick="startRecording('${itemId}')">老师录制</button>
-                        <button class="teacher-stop-btn" onclick="stopRecording('${itemId}')" style="display:none;">停止录制</button>
+                        <button class="record-btn" onclick="startRecording('${itemId}')" id="record-${itemId}">老师录制</button>
+                        <button class="teacher-stop-btn" onclick="stopRecording('${itemId}')" style="display:none;" id="stop-${itemId}">停止录制</button>
                         <button class="teacher-play-btn" onclick="playTeacherAudio('${itemId}')" style="${playBtnStyle}">播放老师发音</button>
                     </div>
                     <button class="delete-btn" onclick="deleteItem('${itemId}')">删除</button>
@@ -489,148 +497,167 @@
         }
 
         /**
-         * 核心修复：全局复用麦克风流，解决连续录制权限被拒问题
+         * 核心修复：录制功能（解决第四句无响应）
+         * 关键：录制前强制清理无效状态，按钮禁用防止重复点击
          */
         async function startRecording(itemId) {
-            // 1. 如果已有正在录制的项，先停止
-            if (activeRecorder && activeItemId !== itemId) {
-                stopRecording(activeItemId);
-            }
-
-            // 2. 标记当前录制项
-            activeItemId = itemId;
+            // 1. 获取DOM元素
+            const recordBtn = document.getElementById(`record-${itemId}`);
+            const stopBtn = document.getElementById(`stop-${itemId}`);
             const statusEl = document.getElementById(`status-${itemId}`);
             const controls = document.querySelector(`#${itemId} .audio-controls`);
 
+            // 2. 禁用录制按钮，防止重复点击导致卡死
+            recordBtn.disabled = true;
+
             try {
-                // 3. 首次录制：请求麦克风流；后续录制：复用已有流
-                if (!globalAudioStream) {
+                // 3. 强制清理无效的活跃Recorder（核心修复）
+                if (activeRecorder) {
+                    try {
+                        if (activeRecorder.state !== 'inactive') {
+                            activeRecorder.stop();
+                        }
+                    } catch (e) {
+                        console.log('清理无效Recorder:', e);
+                    }
+                    activeRecorder = null;
+                    activeItemId = '';
+                }
+
+                // 4. 首次请求麦克风流，后续复用
+                if (!globalAudioStream || globalAudioStream.active === false) {
                     statusEl.textContent = '正在请求麦克风权限...';
                     globalAudioStream = await navigator.mediaDevices.getUserMedia({ 
                         audio: { 
-                            echoCancellation: true, // 回声消除
-                            noiseSuppression: true, // 降噪
-                            autoGainControl: true   // 自动增益
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true
                         } 
                     });
                 }
 
-                // 4. 检查流是否有效
-                if (!globalAudioStream || globalAudioStream.active === false) {
-                    throw new Error('麦克风流已失效，请刷新页面重试');
-                }
-
-                // 5. 创建Recorder（复用全局流）
+                // 5. 创建新的Recorder实例（每次录制新建，避免状态残留）
                 const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
                     ? 'audio/webm;codecs=opus' 
                     : 'audio/mpeg';
                 activeRecorder = new MediaRecorder(globalAudioStream, { mimeType });
-                
+                activeItemId = itemId;
+
                 const audioChunks = [];
 
-                // 6. 监听数据可用
+                // 6. 监听数据片段
                 activeRecorder.ondataavailable = (e) => {
                     if (e.data.size > 0) {
                         audioChunks.push(e.data);
                     }
                 };
 
-                // 7. 监听录音停止：转base64存储
+                // 7. 监听录制停止（彻底重置状态）
                 activeRecorder.onstop = async () => {
+                    // 解锁按钮
+                    recordBtn.disabled = false;
+                    // 重置停止按钮显示
+                    stopBtn.style.display = 'none';
+                    recordBtn.style.display = 'inline-block';
+
+                    // 空录音处理
                     if (audioChunks.length === 0) {
                         statusEl.textContent = '录音内容为空，请重新录制';
-                        // 恢复按钮状态
-                        controls.querySelector('.record-btn').style.display = 'inline-block';
-                        controls.querySelector('.teacher-stop-btn').style.display = 'none';
                         activeRecorder = null;
                         activeItemId = '';
                         return;
                     }
 
-                    // 转Blob为base64（便于存储和分享）
+                    // 转Base64存储（无条数限制）
                     const audioBlob = new Blob(audioChunks, { type: mimeType });
                     const base64 = await blobToBase64(audioBlob);
-                    
-                    // 存储base64数据
                     audioData.set(itemId, base64);
 
-                    // 更新音频元素和按钮
+                    // 更新音频和播放按钮
                     const audioElement = document.getElementById(`audio-${itemId}`);
                     audioElement.src = `data:${mimeType};base64,${base64}`;
                     controls.querySelector('.teacher-play-btn').style.display = 'inline-block';
                     statusEl.textContent = '老师录音完成，可点击播放按钮试听';
 
-                    // 重置活跃Recorder（仅清空，不关闭流）
+                    // 彻底重置状态
                     activeRecorder = null;
                     activeItemId = '';
 
-                    // 重新生成分享链接（包含新录音）
+                    // 刷新分享链接
                     generateStudentShareLink();
                 };
 
-                // 8. 监听录制错误
+                // 8. 监听录制错误（强制解锁按钮）
                 activeRecorder.onerror = (error) => {
-                    console.error('Recorder错误：', error);
+                    console.error('录制错误:', error);
                     statusEl.textContent = '录制出错，请重新尝试';
-                    controls.querySelector('.record-btn').style.display = 'inline-block';
-                    controls.querySelector('.teacher-stop-btn').style.display = 'none';
+                    // 解锁按钮
+                    recordBtn.disabled = false;
+                    stopBtn.style.display = 'none';
+                    recordBtn.style.display = 'inline-block';
+                    // 重置状态
                     activeRecorder = null;
                     activeItemId = '';
                 };
 
-                // 9. 开始录音
+                // 9. 开始录制
                 activeRecorder.start();
                 statusEl.textContent = '正在录制老师发音...（点击停止录制结束）';
-
-                // 10. 更新按钮状态
-                controls.querySelector('.record-btn').style.display = 'none';
-                controls.querySelector('.teacher-stop-btn').style.display = 'inline-block';
-                controls.querySelector('.teacher-play-btn').style.display = 'none';
+                // 更新按钮显示
+                recordBtn.style.display = 'none';
+                stopBtn.style.display = 'inline-block';
 
             } catch (error) {
-                console.error('录音初始化错误：', error);
-                // 更精准的权限提示
-                alert(`录音权限异常！请按以下步骤检查：
-1. 确认浏览器地址栏左侧"锁形图标"中，麦克风权限为"允许"
-2. 关闭其他占用麦克风的软件（如微信、QQ、其他录音网页）
-3. 刷新页面后重新录制
-（注：无需重复允许权限，一次允许即可连续录制）`);
-                statusEl.textContent = '录音权限请求失败，请检查权限设置';
-                // 恢复按钮状态
-                controls.querySelector('.record-btn').style.display = 'inline-block';
-                controls.querySelector('.teacher-stop-btn').style.display = 'none';
+                console.error('录制初始化失败:', error);
+                // 解锁按钮
+                recordBtn.disabled = false;
+                // 友好提示
+                alert(`录音启动失败！请检查：
+1. 麦克风未被其他软件占用（如微信、QQ）
+2. 浏览器麦克风权限为"允许"
+3. 刷新页面后重试（无需重复授权）`);
+                statusEl.textContent = '录音启动失败，请检查麦克风状态';
+                // 重置状态
                 activeRecorder = null;
                 activeItemId = '';
             }
         }
 
         /**
-         * 停止录音（核心：只停止Recorder，不关闭麦克风流）
+         * 停止录制（强化状态重置）
          */
         function stopRecording(itemId) {
             if (!activeRecorder || activeItemId !== itemId) return;
 
-            // 1. 停止Recorder（不关闭流）
-            activeRecorder.stop();
-            
-            // 2. 更新按钮状态
-            const controls = document.querySelector(`#${itemId} .audio-controls`);
-            controls.querySelector('.record-btn').style.display = 'inline-block';
-            controls.querySelector('.teacher-stop-btn').style.display = 'none';
-            
-            // 3. 清空活跃状态（流仍保留）
+            try {
+                // 停止Recorder（兼容不同状态）
+                if (activeRecorder.state === 'recording') {
+                    activeRecorder.stop();
+                }
+            } catch (e) {
+                console.log('停止录制异常:', e);
+            }
+
+            // 强制重置状态
             activeRecorder = null;
             activeItemId = '';
+
+            // 更新按钮
+            const recordBtn = document.getElementById(`record-${itemId}`);
+            const stopBtn = document.getElementById(`stop-${itemId}`);
+            recordBtn.disabled = false;
+            stopBtn.style.display = 'none';
+            recordBtn.style.display = 'inline-block';
         }
 
         /**
-         * 播放老师的录音（老师/学生都可用）
+         * 播放老师录音
          */
         function playTeacherAudio(itemId) {
             const audioElement = document.getElementById(`audio-${itemId}`);
             if (audioElement.src) {
                 audioElement.play().catch(error => {
-                    console.error('播放错误：', error);
+                    console.error('播放错误:', error);
                     alert('播放失败！请检查音频是否正常录制。');
                 });
                 document.getElementById(`status-${itemId}`).textContent = '正在播放老师的标准发音...';
@@ -640,25 +667,25 @@
         }
 
         /**
-         * 删除词句项
+         * 删除词句项（清理对应音频数据）
          */
         function deleteItem(itemId) {
             if (confirm('确定要删除这个词句项吗？删除后录音和翻译也会被移除！')) {
-                // 停止该项目的录音（如果正在录制）
+                // 停止该项目的录制（如果正在录）
                 if (activeItemId === itemId) {
                     stopRecording(itemId);
                 }
                 // 移除音频数据
                 audioData.delete(itemId);
-                // 移除DOM元素
+                // 移除DOM
                 document.getElementById(itemId).remove();
-                // 重新生成分享链接
+                // 刷新分享链接
                 if (!isStudentMode) generateStudentShareLink();
             }
         }
 
         /**
-         * Blob转Base64（用于存储音频）
+         * Blob转Base64
          */
         function blobToBase64(blob) {
             return new Promise((resolve, reject) => {
@@ -679,7 +706,7 @@
                 return;
             }
 
-            // 构建PDF专用容器
+            // 构建PDF容器
             const pdfContainer = document.getElementById('pdf-container');
             const pdfContent = document.getElementById('pdf-content');
             const pdfTime = document.getElementById('pdf-time');
@@ -702,7 +729,7 @@
                 pdfContent.appendChild(pdfItem);
             });
 
-            // 显示容器并截图
+            // 截图导出
             pdfContainer.style.display = 'block';
             html2canvas(pdfContainer, {
                 scale: 2,
@@ -739,7 +766,7 @@
         }
 
         /**
-         * 生成学生专用短链接（包含老师录音）
+         * 生成学生链接（包含所有录音）
          */
         function generateStudentShareLink() {
             const content = collectAllContent();
@@ -748,15 +775,15 @@
                 return;
             }
 
-            // 生成/复用短ID
+            // 复用/生成短ID
             if (!currentShareId) {
                 currentShareId = generateShortId(6);
             }
 
-            // 存储内容到localStorage（包含音频base64）
+            // 存储内容（无条数限制）
             localStorage.setItem(`yueyu_${currentShareId}`, JSON.stringify(content));
 
-            // 生成学生链接（带role=student）
+            // 生成学生链接
             const baseUrl = window.location.href.split('?')[0];
             const studentLink = `${baseUrl}?id=${currentShareId}&role=student`;
 
@@ -765,12 +792,13 @@
         }
 
         /**
-         * 收集所有内容（词句+翻译+音频base64）
+         * 收集所有内容（无条数限制）
          */
         function collectAllContent() {
             const items = [];
             const wordItems = document.querySelectorAll('.word-item');
             
+            // 遍历所有项，无条数限制
             wordItems.forEach(item => {
                 const itemId = item.id;
                 const sentence = item.querySelector('.sentence-text').textContent;
@@ -805,16 +833,16 @@
 
             shareLinkInput.select();
             document.execCommand('copy');
-            alert('学生专用链接已复制！学生打开后可播放您的录音、查看翻译、导出PDF');
+            alert('学生专用链接已复制！可无限制添加/录制词句，学生均可播放');
         }
 
         /**
-         * 加载分享内容（学生模式）
+         * 加载学生内容
          */
         function loadSharedContent(shareId) {
             const contentStr = localStorage.getItem(`yueyu_${shareId}`);
             if (!contentStr) {
-                alert('未找到对应的练习内容！可能是链接已过期或内容已被删除。');
+                alert('未找到对应的练习内容！');
                 return;
             }
 
@@ -824,11 +852,11 @@
                 return;
             }
 
-            // 清空现有列表
+            // 清空列表
             const wordList = document.getElementById('word-list');
             wordList.innerHTML = '';
 
-            // 加载内容（学生模式：只显示播放按钮，翻译只读）
+            // 加载所有内容（无条数限制）
             content.items.forEach(item => {
                 const itemId = generateShortId(8);
                 const newItem = createWordItem(itemId, item.sentence, item.translation, item.audioBase64);
