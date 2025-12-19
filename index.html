@@ -334,11 +334,13 @@
     <script src="https://cdn.bootcdn.net/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
     <script>
-        // 全局变量
-        let activeRecorders = new Map(); // 活跃的录音对象（避免重复占用）
-        let audioData = new Map(); // 存储音频base64数据（key: itemId, value: base64字符串）
+        // 全局变量 - 核心改动：复用麦克风流
+        let globalAudioStream = null; // 全局麦克风流（只请求一次）
+        let activeRecorder = null;    // 当前活跃的Recorder（同一时间只允许录一个）
+        let activeItemId = '';        // 当前正在录制的项ID
+        let audioData = new Map();    // 存储音频base64数据（key: itemId, value: base64字符串）
         let currentShareId = '';
-        let isStudentMode = false; // 是否为学生模式
+        let isStudentMode = false;    // 是否为学生模式
 
         // 页面加载完成后初始化
         document.addEventListener('DOMContentLoaded', () => {
@@ -358,6 +360,14 @@
             if (isStudentMode && shareId) {
                 loadSharedContent(shareId);
             }
+
+            // 页面卸载时释放麦克风流（避免内存泄漏）
+            window.addEventListener('beforeunload', () => {
+                if (globalAudioStream) {
+                    globalAudioStream.getTracks().forEach(track => track.stop());
+                    globalAudioStream = null;
+                }
+            });
         });
 
         /**
@@ -479,47 +489,61 @@
         }
 
         /**
-         * 优化版录音功能：彻底解决权限被拒、录几句就停的问题
+         * 核心修复：全局复用麦克风流，解决连续录制权限被拒问题
          */
         async function startRecording(itemId) {
-            // 1. 先停止当前项的已有录音（避免冲突）
-            if (activeRecorders.has(itemId)) {
-                stopRecording(itemId);
+            // 1. 如果已有正在录制的项，先停止
+            if (activeRecorder && activeItemId !== itemId) {
+                stopRecording(activeItemId);
             }
 
-            try {
-                // 2. 请求麦克风权限（强制重新请求，避免缓存问题）
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { 
-                        echoCancellation: true, // 回声消除
-                        noiseSuppression: true // 降噪
-                    } 
-                });
+            // 2. 标记当前录制项
+            activeItemId = itemId;
+            const statusEl = document.getElementById(`status-${itemId}`);
+            const controls = document.querySelector(`#${itemId} .audio-controls`);
 
-                // 3. 创建MediaRecorder（指定编码格式，提高兼容性）
+            try {
+                // 3. 首次录制：请求麦克风流；后续录制：复用已有流
+                if (!globalAudioStream) {
+                    statusEl.textContent = '正在请求麦克风权限...';
+                    globalAudioStream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: { 
+                            echoCancellation: true, // 回声消除
+                            noiseSuppression: true, // 降噪
+                            autoGainControl: true   // 自动增益
+                        } 
+                    });
+                }
+
+                // 4. 检查流是否有效
+                if (!globalAudioStream || globalAudioStream.active === false) {
+                    throw new Error('麦克风流已失效，请刷新页面重试');
+                }
+
+                // 5. 创建Recorder（复用全局流）
                 const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
                     ? 'audio/webm;codecs=opus' 
                     : 'audio/mpeg';
-                const recorder = new MediaRecorder(stream, { mimeType });
+                activeRecorder = new MediaRecorder(globalAudioStream, { mimeType });
                 
                 const audioChunks = [];
 
-                // 4. 监听数据可用
-                recorder.ondataavailable = (e) => {
+                // 6. 监听数据可用
+                activeRecorder.ondataavailable = (e) => {
                     if (e.data.size > 0) {
                         audioChunks.push(e.data);
                     }
                 };
 
-                // 5. 监听录音停止：转base64存储
-                recorder.onstop = async () => {
-                    // 彻底停止所有媒体轨道
-                    stream.getTracks().forEach(track => {
-                        track.stop();
-                    });
-
+                // 7. 监听录音停止：转base64存储
+                activeRecorder.onstop = async () => {
                     if (audioChunks.length === 0) {
-                        document.getElementById(`status-${itemId}`).textContent = '录音内容为空，请重新录制';
+                        statusEl.textContent = '录音内容为空，请重新录制';
+                        // 恢复按钮状态
+                        controls.querySelector('.record-btn').style.display = 'inline-block';
+                        controls.querySelector('.teacher-stop-btn').style.display = 'none';
+                        activeRecorder = null;
+                        activeItemId = '';
                         return;
                     }
 
@@ -530,61 +554,73 @@
                     // 存储base64数据
                     audioData.set(itemId, base64);
 
-                    // 更新音频元素
+                    // 更新音频元素和按钮
                     const audioElement = document.getElementById(`audio-${itemId}`);
                     audioElement.src = `data:${mimeType};base64,${base64}`;
-                    
-                    // 显示播放按钮
-                    document.querySelector(`#${itemId} .teacher-play-btn`).style.display = 'inline-block';
-                    document.getElementById(`status-${itemId}`).textContent = '老师录音完成，可点击播放按钮试听';
+                    controls.querySelector('.teacher-play-btn').style.display = 'inline-block';
+                    statusEl.textContent = '老师录音完成，可点击播放按钮试听';
 
-                    // 移除活跃录音记录
-                    activeRecorders.delete(itemId);
+                    // 重置活跃Recorder（仅清空，不关闭流）
+                    activeRecorder = null;
+                    activeItemId = '';
 
                     // 重新生成分享链接（包含新录音）
                     generateStudentShareLink();
                 };
 
-                // 6. 存储活跃录音对象
-                activeRecorders.set(itemId, { recorder, stream });
+                // 8. 监听录制错误
+                activeRecorder.onerror = (error) => {
+                    console.error('Recorder错误：', error);
+                    statusEl.textContent = '录制出错，请重新尝试';
+                    controls.querySelector('.record-btn').style.display = 'inline-block';
+                    controls.querySelector('.teacher-stop-btn').style.display = 'none';
+                    activeRecorder = null;
+                    activeItemId = '';
+                };
 
-                // 7. 开始录音
-                recorder.start();
+                // 9. 开始录音
+                activeRecorder.start();
+                statusEl.textContent = '正在录制老师发音...（点击停止录制结束）';
 
-                // 8. 更新按钮状态
-                const controls = document.querySelector(`#${itemId} .audio-controls`);
+                // 10. 更新按钮状态
                 controls.querySelector('.record-btn').style.display = 'none';
                 controls.querySelector('.teacher-stop-btn').style.display = 'inline-block';
                 controls.querySelector('.teacher-play-btn').style.display = 'none';
-                
-                document.getElementById(`status-${itemId}`).textContent = '正在录制老师发音...（点击停止录制结束）';
 
             } catch (error) {
-                console.error('录音错误：', error);
-                // 更友好的权限提示
-                alert(`录音权限被拒绝！请按以下步骤操作：
-1. 点击浏览器地址栏左侧的"锁形/感叹号"图标
-2. 找到"麦克风"权限，设置为"允许"
-3. 刷新页面后重新录制`);
+                console.error('录音初始化错误：', error);
+                // 更精准的权限提示
+                alert(`录音权限异常！请按以下步骤检查：
+1. 确认浏览器地址栏左侧"锁形图标"中，麦克风权限为"允许"
+2. 关闭其他占用麦克风的软件（如微信、QQ、其他录音网页）
+3. 刷新页面后重新录制
+（注：无需重复允许权限，一次允许即可连续录制）`);
+                statusEl.textContent = '录音权限请求失败，请检查权限设置';
+                // 恢复按钮状态
+                controls.querySelector('.record-btn').style.display = 'inline-block';
+                controls.querySelector('.teacher-stop-btn').style.display = 'none';
+                activeRecorder = null;
+                activeItemId = '';
             }
         }
 
         /**
-         * 停止录音
+         * 停止录音（核心：只停止Recorder，不关闭麦克风流）
          */
         function stopRecording(itemId) {
-            const activeRecord = activeRecorders.get(itemId);
-            if (activeRecord && activeRecord.recorder.state === 'recording') {
-                // 停止录音
-                activeRecord.recorder.stop();
-                // 停止媒体流（关键：释放麦克风）
-                activeRecord.stream.getTracks().forEach(track => track.stop());
-                
-                // 更新按钮状态
-                const controls = document.querySelector(`#${itemId} .audio-controls`);
-                controls.querySelector('.record-btn').style.display = 'inline-block';
-                controls.querySelector('.teacher-stop-btn').style.display = 'none';
-            }
+            if (!activeRecorder || activeItemId !== itemId) return;
+
+            // 1. 停止Recorder（不关闭流）
+            activeRecorder.stop();
+            
+            // 2. 更新按钮状态
+            const controls = document.querySelector(`#${itemId} .audio-controls`);
+            controls.querySelector('.record-btn').style.display = 'inline-block';
+            controls.querySelector('.teacher-stop-btn').style.display = 'none';
+            
+            // 3. 清空活跃状态（流仍保留）
+            activeRecorder = null;
+            activeItemId = '';
         }
 
         /**
@@ -609,10 +645,11 @@
         function deleteItem(itemId) {
             if (confirm('确定要删除这个词句项吗？删除后录音和翻译也会被移除！')) {
                 // 停止该项目的录音（如果正在录制）
-                stopRecording(itemId);
+                if (activeItemId === itemId) {
+                    stopRecording(itemId);
+                }
                 // 移除音频数据
                 audioData.delete(itemId);
-                activeRecorders.delete(itemId);
                 // 移除DOM元素
                 document.getElementById(itemId).remove();
                 // 重新生成分享链接
