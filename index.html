@@ -42,7 +42,7 @@
         /* 输入区域 */
         .input-section {
             gap: 10px;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             flex-wrap: wrap;
         }
 
@@ -71,13 +71,26 @@
 
         #add-btn:hover { background-color: #3182ce; }
 
-        /* 分享区域 */
-        .share-section {
+        /* 保存+分享区域（新增保存按钮） */
+        .save-share-section {
+            display: flex;
             gap: 10px;
-            margin-bottom: 20px;
+            margin-bottom: 30px;
             flex-wrap: wrap;
             align-items: center;
         }
+
+        #save-btn {
+            padding: 10px 20px;
+            background-color: #e53e3e;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        #save-btn:hover { background-color: #c53030; }
 
         #share-link {
             flex: 1;
@@ -128,7 +141,7 @@
             padding: 8px;
         }
 
-        /* 音频按钮 - 核心：严格的禁用状态样式 */
+        /* 音频按钮 - 严格的禁用状态样式 */
         .audio-controls { display: flex; gap: 8px; }
 
         .record-btn, .stop-btn, .play-btn {
@@ -204,6 +217,14 @@
             margin-top: 5px;
         }
 
+        /* 保存成功提示 */
+        .save-tip {
+            font-size: 12px;
+            color: #48bb78;
+            margin-left: 10px;
+            display: none;
+        }
+
         /* PDF导出 */
         .export-section { text-align: center; margin-top: 30px; }
 
@@ -239,10 +260,12 @@
             <button id="add-btn">批量添加词句</button>
         </div>
 
-        <!-- 老师专属：分享区域 -->
-        <div class="share-section teacher-only">
-            <input type="text" id="share-link" readonly placeholder="生成的学生短链接会显示在这里...">
+        <!-- 新增：保存+分享区域（核心修改） -->
+        <div class="save-share-section teacher-only">
+            <button id="save-btn">💾 保存所有内容</button>
+            <input type="text" id="share-link" readonly placeholder="先保存内容，再生成学生链接...">
             <button id="copy-link-btn">复制学生链接</button>
+            <span class="save-tip" id="save-tip">✅ 内容已保存！</span>
         </div>
 
         <!-- 词句列表 -->
@@ -273,7 +296,9 @@
             currentRecorder: null,   // 当前唯一的Recorder实例
             isRecording: false,      // 全局录制状态（核心：布尔值，无歧义）
             recordingItemId: '',     // 当前录制的词句ID
-            audioData: new Map()     // 音频数据存储（key: itemId, value: base64）
+            audioData: new Map(),    // 音频数据存储（key: itemId, value: base64）
+            shareId: '',             // 固定的分享ID（避免随机生成导致丢失）
+            isSaved: false           // 标记是否已保存
         };
 
         // 页面初始化
@@ -289,10 +314,13 @@
                 document.getElementById('page-title').textContent = '粤语纠音练习册（学生跟读版）';
                 if (shareId) loadStudentContent(shareId);
             } else {
+                // 初始化老师模式事件（新增保存按钮事件）
                 initTeacherEventListeners();
+                // 尝试加载本地已保存的内容（打开页面自动恢复）
+                loadSavedContent();
             }
 
-            // 页面卸载：彻底释放所有资源（核心：防止内存泄漏）
+            // 页面卸载：彻底释放所有资源
             window.addEventListener('beforeunload', () => {
                 // 停止录制
                 if (appState.isRecording && appState.currentRecorder) {
@@ -306,14 +334,13 @@
                 appState.currentRecorder = null;
                 appState.isRecording = false;
                 appState.recordingItemId = '';
-                appState.audioData.clear();
             });
 
             // 绑定PDF导出事件
             document.getElementById('export-pdf-btn').addEventListener('click', exportPdf);
         });
 
-        // 初始化老师模式事件
+        // 初始化老师模式事件（新增保存按钮逻辑）
         function initTeacherEventListeners() {
             // 批量添加词句
             document.getElementById('add-btn').addEventListener('click', () => {
@@ -342,25 +369,110 @@
                 input.value = '';
                 input.focus();
 
-                // 生成分享链接
-                updateShareLink();
+                // 标记为未保存
+                appState.isSaved = false;
+                document.getElementById('save-tip').style.display = 'none';
 
-                alert(`成功添加 ${sentences.length} 个词句！可无限制录制音频`);
+                alert(`成功添加 ${sentences.length} 个词句！请点击【保存所有内容】确保不丢失`);
+            });
+
+            // 新增：保存按钮点击事件（核心）
+            document.getElementById('save-btn').addEventListener('click', () => {
+                saveAllContent();
+                // 显示保存成功提示
+                document.getElementById('save-tip').style.display = 'inline-block';
+                // 3秒后隐藏提示
+                setTimeout(() => {
+                    document.getElementById('save-tip').style.display = 'none';
+                }, 3000);
+                alert('所有内容（词句+翻译+录音）已保存！现在可以生成学生链接了');
             });
 
             // 复制分享链接
             document.getElementById('copy-link-btn').addEventListener('click', () => {
                 const linkInput = document.getElementById('share-link');
                 const link = linkInput.value;
-                if (!link || link === '暂无内容可分享') {
-                    alert('暂无可复制的链接！');
+                if (!link || link === '先保存内容，再生成学生链接...') {
+                    alert('请先点击【保存所有内容】生成链接！');
                     return;
                 }
 
                 linkInput.select();
                 document.execCommand('copy');
-                alert('学生链接已复制！');
+                alert('学生链接已复制！同一浏览器打开可查看所有练习内容');
             });
+        }
+
+        // 核心新增：保存所有内容到本地存储（确保不丢失）
+        function saveAllContent() {
+            const wordItems = document.querySelectorAll('.word-item');
+            if (wordItems.length === 0) {
+                alert('暂无内容可保存！请先添加词句/录制录音');
+                return;
+            }
+
+            // 收集所有内容（词句+翻译+录音）
+            const content = {
+                createTime: new Date().toLocaleString(),
+                updateTime: new Date().toLocaleString(),
+                items: Array.from(wordItems).map(item => {
+                    const itemId = item.id.replace('item-', '');
+                    return {
+                        id: itemId,
+                        sentence: item.querySelector('.sentence-text').textContent,
+                        translation: document.getElementById(`trans-${itemId}`).value,
+                        audioBase64: appState.audioData.get(itemId) || ''
+                    };
+                })
+            };
+
+            // 生成/复用固定的分享ID（避免随机生成导致丢失）
+            if (!appState.shareId) {
+                appState.shareId = localStorage.getItem('yueyu_fixed_share_id') || generateId();
+                localStorage.setItem('yueyu_fixed_share_id', appState.shareId);
+            }
+
+            // 保存到本地存储（覆盖旧数据，确保最新）
+            localStorage.setItem(`yueyu_content_${appState.shareId}`, JSON.stringify(content));
+            localStorage.setItem('yueyu_last_saved_content', JSON.stringify(content)); // 备份
+
+            // 标记为已保存
+            appState.isSaved = true;
+
+            // 生成学生链接并显示
+            const baseUrl = window.location.href.split('?')[0];
+            const shareLink = `${baseUrl}?id=${appState.shareId}&role=student`;
+            document.getElementById('share-link').value = shareLink;
+        }
+
+        // 核心新增：加载已保存的内容（打开页面自动恢复）
+        function loadSavedContent() {
+            // 读取备份的已保存内容
+            const savedContentStr = localStorage.getItem('yueyu_last_saved_content');
+            if (!savedContentStr) return;
+
+            const savedContent = JSON.parse(savedContentStr);
+            if (!savedContent || !savedContent.items || savedContent.items.length === 0) return;
+
+            // 恢复分享ID
+            appState.shareId = localStorage.getItem('yueyu_fixed_share_id') || '';
+
+            // 恢复词句列表
+            const wordList = document.getElementById('word-list');
+            savedContent.items.forEach(item => {
+                wordList.appendChild(createWordItem(item.id, item.sentence, item.translation, item.audioBase64));
+            });
+
+            // 恢复链接
+            if (appState.shareId) {
+                const baseUrl = window.location.href.split('?')[0];
+                const shareLink = `${baseUrl}?id=${appState.shareId}&role=student`;
+                document.getElementById('share-link').value = shareLink;
+            }
+
+            // 标记为已保存
+            appState.isSaved = true;
+            console.log('已自动恢复上次保存的内容');
         }
 
         // 创建词句项DOM
@@ -400,7 +512,7 @@
             return item;
         }
 
-        // 核心：开始录制（彻底重构，无状态残留）
+        // 开始录制（逻辑不变，保持稳定）
         async function startRecord(itemId) {
             // 1. 禁止重复录制（全局状态锁）
             if (appState.isRecording) {
@@ -431,9 +543,9 @@
                     });
                 }
 
-                // 5. 创建全新的Recorder实例（每次录制都新建，避免状态残留）
+                // 5. 创建全新的Recorder实例
                 appState.currentRecorder = new MediaRecorder(appState.audioStream, {
-                    mimeType: 'audio/webm;codecs=opus' // 通用兼容格式
+                    mimeType: 'audio/webm;codecs=opus'
                 });
                 appState.isRecording = true;
                 appState.recordingItemId = itemId;
@@ -445,9 +557,9 @@
                     if (e.data.size > 0) audioChunks.push(e.data);
                 };
 
-                // 7. 监听录制停止（核心：彻底重置状态）
+                // 7. 监听录制停止
                 appState.currentRecorder.onstop = async () => {
-                    // 重置全局状态（优先级最高）
+                    // 重置全局状态
                     appState.isRecording = false;
                     appState.recordingItemId = '';
 
@@ -459,8 +571,9 @@
                     // 空录音处理
                     if (audioChunks.length === 0) {
                         statusEl.textContent = '录音内容为空，请重新录制';
-                        // 销毁Recorder实例
                         appState.currentRecorder = null;
+                        // 标记为未保存
+                        appState.isSaved = false;
                         return;
                     }
 
@@ -475,16 +588,16 @@
                     document.getElementById(`play-${itemId}`).style.display = 'block';
 
                     // 更新状态提示
-                    statusEl.textContent = '录音完成！可点击播放';
+                    statusEl.textContent = '录音完成！请点击【保存所有内容】确保不丢失';
 
-                    // 销毁Recorder实例（核心：释放内存）
+                    // 销毁Recorder实例
                     appState.currentRecorder = null;
 
-                    // 更新分享链接
-                    updateShareLink();
+                    // 标记为未保存（提醒用户保存）
+                    appState.isSaved = false;
                 };
 
-                // 8. 监听录制错误（兜底：强制重置所有状态）
+                // 8. 监听录制错误
                 appState.currentRecorder.onerror = (error) => {
                     console.error('录制错误:', error);
                     // 强制重置全局状态
@@ -497,6 +610,8 @@
                     stopBtn.style.display = 'none';
                     // 提示用户
                     statusEl.textContent = '录制出错！请重试';
+                    // 标记为未保存
+                    appState.isSaved = false;
                     alert('录制出错：可能是麦克风被占用，请关闭其他录音软件后重试');
                 };
 
@@ -519,7 +634,7 @@
             }
         }
 
-        // 停止录制（强制+兜底）
+        // 停止录制（逻辑不变）
         function stopRecord(itemId) {
             // 校验：只能停止当前正在录制的项
             if (!appState.isRecording || appState.recordingItemId !== itemId) {
@@ -543,10 +658,12 @@
                 document.getElementById(`stop-${itemId}`).disabled = true;
                 document.getElementById(`stop-${itemId}`).style.display = 'none';
                 document.getElementById(`status-${itemId}`).textContent = '录制已终止';
+                // 标记为未保存
+                appState.isSaved = false;
             }
         }
 
-        // 播放音频
+        // 播放音频（逻辑不变）
         function playAudio(itemId) {
             const audioEl = document.getElementById(`audio-${itemId}`);
             if (!audioEl.src) {
@@ -569,7 +686,7 @@
             document.getElementById(`status-${itemId}`).textContent = '正在播放老师发音...';
         }
 
-        // 删除词句项
+        // 删除词句项（新增：删除后标记为未保存）
         function deleteItem(itemId) {
             if (!confirm('确定删除该词句吗？删除后录音和翻译也会被移除！')) return;
 
@@ -582,51 +699,19 @@
             document.getElementById(`item-${itemId}`).remove();
             appState.audioData.delete(itemId);
 
-            // 更新分享链接
-            updateShareLink();
+            // 标记为未保存
+            appState.isSaved = false;
+            document.getElementById('save-tip').style.display = 'none';
+
+            alert('已删除！请点击【保存所有内容】更新学生链接');
         }
 
-        // 生成分享链接
-        function updateShareLink() {
-            const wordItems = document.querySelectorAll('.word-item');
-            if (wordItems.length === 0) {
-                document.getElementById('share-link').value = '暂无内容可分享';
-                return;
-            }
-
-            // 收集所有内容
-            const content = {
-                createTime: new Date().toLocaleString(),
-                items: Array.from(wordItems).map(item => {
-                    const itemId = item.id.replace('item-', '');
-                    return {
-                        id: itemId,
-                        sentence: item.querySelector('.sentence-text').textContent,
-                        translation: document.getElementById(`trans-${itemId}`).value,
-                        audioBase64: appState.audioData.get(itemId) || ''
-                    };
-                })
-            };
-
-            // 生成唯一ID并存储到本地
-            let shareId = localStorage.getItem('yueyu_share_id');
-            if (!shareId) {
-                shareId = generateId();
-                localStorage.setItem('yueyu_share_id', shareId);
-            }
-            localStorage.setItem(`yueyu_content_${shareId}`, JSON.stringify(content));
-
-            // 生成链接
-            const baseUrl = window.location.href.split('?')[0];
-            const shareLink = `${baseUrl}?id=${shareId}&role=student`;
-            document.getElementById('share-link').value = shareLink;
-        }
-
-        // 加载学生模式内容
+        // 加载学生模式内容（优化：增强容错）
         function loadStudentContent(shareId) {
-            const contentStr = localStorage.getItem(`yueyu_content_${shareId}`);
+            // 先读专属内容，再读备份
+            let contentStr = localStorage.getItem(`yueyu_content_${shareId}`) || localStorage.getItem('yueyu_last_saved_content');
             if (!contentStr) {
-                alert('未找到对应的练习内容！');
+                alert('未找到对应的练习内容！请确认：1. 在同一浏览器打开 2. 老师已保存内容');
                 return;
             }
 
@@ -636,14 +721,18 @@
                 return;
             }
 
-            // 渲染内容
+            // 渲染内容（确保100%显示）
             const wordList = document.getElementById('word-list');
+            // 先清空列表，避免重复
+            wordList.innerHTML = '';
             content.items.forEach(item => {
                 wordList.appendChild(createWordItem(item.id, item.sentence, item.translation, item.audioBase64));
             });
+
+            alert(`成功加载 ${content.items.length} 个练习内容！`);
         }
 
-        // 导出PDF
+        // 导出PDF（逻辑不变）
         function exportPdf() {
             const wordItems = document.querySelectorAll('.word-item');
             if (wordItems.length === 0) {
