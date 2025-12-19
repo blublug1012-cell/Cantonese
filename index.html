@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>粤语口语练习工具（逐句录音频）</title>
+    <title>粤语口语练习工具（分句+逐句录音）</title>
     <style>
         * {
             margin: 0;
@@ -49,6 +49,10 @@
             border: 1px solid #ddd;
             border-radius: 5px;
             font-size: 16px;
+        }
+        textarea {
+            min-height: 100px;
+            resize: vertical;
         }
         .btn-group {
             display: flex;
@@ -140,18 +144,26 @@
     <div class="container">
         <h1>粤语口语练习工具</h1>
         
-        <!-- 单句输入区域（逐句添加） -->
+        <!-- 批量分句输入区域 -->
         <div class="input-area">
             <div class="input-group">
-                <label for="cantonese-sentence">粤语词句（单句）</label>
-                <input type="text" id="cantonese-sentence" placeholder="输入一句粤语，例如：我睇得明中文字。">
+                <label for="cantonese-sentences">粤语词句（每行一句）</label>
+                <textarea id="cantonese-sentences" placeholder="输入多行粤语，每行一句
+例如：
+我睇得明中文字。
+可唔可以？
+以前有讲广东话，而家主要想练习口语。"></textarea>
             </div>
             <div class="input-group">
-                <label for="translation">普通话翻译</label>
-                <input type="text" id="translation" placeholder="输入对应的翻译，例如：我看得懂中文字。">
+                <label for="translations">普通话翻译（每行对应）</label>
+                <textarea id="translations" placeholder="输入对应的翻译，每行对应
+例如：
+我看得懂中文字。
+可不可以？
+以前有讲广东话，现在主要是想练习口语。"></textarea>
             </div>
             <div class="btn-group">
-                <button id="add-single-item" class="btn-primary">添加这句话</button>
+                <button id="batch-add-btn" class="btn-primary">批量添加这些句子</button>
             </div>
         </div>
 
@@ -165,14 +177,14 @@
             </div>
         </div>
 
-        <!-- 练习列表（每个句子独立音频控件） -->
+        <!-- 练习列表（每个句子独立录音控件） -->
         <div class="practice-list" id="practice-list">
             <h3>练习列表</h3>
         </div>
     </div>
 
     <script>
-        // 全局状态：管理云端分享
+        // 全局状态：管理云端分享+音频Base64（解决JSON解析问题）
         const appState = {
             shareId: localStorage.getItem('shareId') || Math.random().toString(36).slice(2, 10),
             kvConfig: { url: '/api/kv' }
@@ -180,35 +192,57 @@
 
         // DOM元素
         const elements = {
-            sentenceInput: document.getElementById('cantonese-sentence'),
-            translationInput: document.getElementById('translation'),
-            addSingleBtn: document.getElementById('add-single-item'),
+            sentencesInput: document.getElementById('cantonese-sentences'),
+            translationsInput: document.getElementById('translations'),
+            batchAddBtn: document.getElementById('batch-add-btn'),
             saveToCloudBtn: document.getElementById('save-to-cloud'),
             copyLinkBtn: document.getElementById('copy-link'),
             studentLinkInput: document.getElementById('student-link'),
             practiceList: document.getElementById('practice-list')
         };
 
-        // 初始化：绑定添加单句事件
-        elements.addSingleBtn.addEventListener('click', addSingleSentence);
+        // 初始化：绑定批量添加事件
+        elements.batchAddBtn.addEventListener('click', batchAddSentences);
         // 绑定云端相关事件
         elements.saveToCloudBtn.addEventListener('click', saveToCloud);
         elements.copyLinkBtn.addEventListener('click', copyLink);
 
         /**
-         * 添加单句到练习列表（每个句子带独立音频控件）
+         * 批量添加句子（自动分句）
          */
-        function addSingleSentence() {
-            const sentence = elements.sentenceInput.value.trim();
-            const translation = elements.translationInput.value.trim() || '无';
+        function batchAddSentences() {
+            // 1. 处理输入：按行拆分，过滤空行
+            const sentences = elements.sentencesInput.value.trim().split(/[\n\r]+/).filter(line => line.trim());
+            const translations = elements.translationsInput.value.trim().split(/[\n\r]+/).filter(line => line.trim());
 
-            if (!sentence) {
-                alert('请输入粤语词句！');
+            if (sentences.length === 0) {
+                alert('请输入至少一句粤语！');
                 return;
             }
 
-            // 生成唯一ID，用于绑定当前句子的音频
-            const itemId = `sentence-${Date.now()}`;
+            // 2. 补全翻译（若行数不匹配）
+            const fillTranslations = [...translations];
+            while (fillTranslations.length < sentences.length) {
+                fillTranslations.push('无');
+            }
+
+            // 3. 清空旧列表，批量生成练习项（每个句子独立）
+            elements.practiceList.innerHTML = '<h3>练习列表</h3>';
+            sentences.forEach((sentence, index) => {
+                const translation = fillTranslations[index].trim();
+                addSinglePracticeItem(sentence.trim(), translation);
+            });
+
+            // 4. 清空输入框
+            elements.sentencesInput.value = '';
+            elements.translationsInput.value = '';
+        }
+
+        /**
+         * 添加单个练习项（带独立录音控件）
+         */
+        function addSinglePracticeItem(sentence, translation) {
+            const itemId = `sentence-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
             // 创建练习项DOM
             const practiceItem = document.createElement('div');
@@ -218,64 +252,60 @@
                 <h3>${sentence}</h3>
                 <div class="translation">翻译：${translation}</div>
                 <div class="item-btn-group">
-                    <button class="btn-success record-single" data-target="${itemId}">🎙️ 录这句话</button>
-                    <button class="btn-danger stop-single" data-target="${itemId}" disabled>⏹️ 停止</button>
+                    <button class="btn-success record-single" data-id="${itemId}">🎙️ 录这句话</button>
+                    <button class="btn-danger stop-single" data-id="${itemId}" disabled>⏹️ 停止</button>
                 </div>
-                <div class="audio-controls" id="audio-${itemId}">
+                <div class="audio-controls" id="audio-container-${itemId}">
                     <span>暂未录制音频</span>
+                    <input type="hidden" class="audio-base64" data-id="${itemId}" value="">
                 </div>
-                <button class="btn-danger delete-item" data-target="${itemId}">删除这句话</button>
+                <button class="btn-danger delete-item" data-id="${itemId}">删除这句话</button>
             `;
 
-            // 绑定当前句子的事件：录制、停止、删除
-            bindSingleItemEvents(practiceItem, itemId);
+            // 绑定当前句子的事件
+            bindItemEvents(practiceItem, itemId);
 
             // 添加到列表
             elements.practiceList.appendChild(practiceItem);
-
-            // 清空输入框
-            elements.sentenceInput.value = '';
-            elements.translationInput.value = '';
         }
 
         /**
-         * 绑定单个练习项的独立事件（录制、停止、删除）
+         * 绑定单个练习项的事件（录音、停止、删除）
          */
-        function bindSingleItemEvents(itemDom, itemId) {
+        function bindItemEvents(itemDom, itemId) {
             const recordBtn = itemDom.querySelector('.record-single');
             const stopBtn = itemDom.querySelector('.stop-single');
             const deleteBtn = itemDom.querySelector('.delete-item');
-            const audioContainer = document.getElementById(`audio-${itemId}`);
+            const audioContainer = document.getElementById(`audio-container-${itemId}`);
+            const audioBase64Input = audioContainer.querySelector('.audio-base64');
 
-            // 存储当前句子的录制实例（独立，不影响其他句子）
             let mediaRecorder = null;
             let audioChunks = [];
 
             // 1. 录制当前句子的音频
             recordBtn.addEventListener('click', async () => {
                 try {
-                    // 获取麦克风权限
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     mediaRecorder = new MediaRecorder(stream);
                     audioChunks = [];
 
-                    // 收集当前句子的音频数据
+                    // 收集音频数据
                     mediaRecorder.ondataavailable = (e) => {
                         audioChunks.push(e.data);
                     };
 
-                    // 录制结束：生成当前句子的音频
-                    mediaRecorder.onstop = () => {
+                    // 录制结束：转Base64（解决JSON解析问题）
+                    mediaRecorder.onstop = async () => {
                         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                        const audioUrl = URL.createObjectURL(audioBlob);
+                        const base64 = await blobToBase64(audioBlob);
 
-                        // 替换为当前句子的音频播放控件
+                        // 更新UI：显示播放控件+保存Base64
                         audioContainer.innerHTML = `
-                            <audio controls src="${audioUrl}"></audio>
-                            <input type="hidden" class="audio-data" value="${audioUrl}">
+                            <audio controls src="data:audio/webm;base64,${base64}"></audio>
+                            <input type="hidden" class="audio-base64" data-id="${itemId}" value="${base64}">
                         `;
 
-                        // 停止所有音轨
+                        // 停止音轨
                         stream.getTracks().forEach(track => track.stop());
                     };
 
@@ -285,11 +315,11 @@
                     stopBtn.disabled = false;
                     audioContainer.innerHTML = '<span>正在录制...</span>';
                 } catch (error) {
-                    alert('请允许麦克风权限，才能录制音频！');
+                    alert('请允许麦克风权限后再尝试录制！');
                 }
             });
 
-            // 2. 停止当前句子的录制
+            // 2. 停止录制
             stopBtn.addEventListener('click', () => {
                 if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                     mediaRecorder.stop();
@@ -306,50 +336,79 @@
         }
 
         /**
-         * 保存所有句子（含各自音频）到云端
+         * 工具函数：Blob转Base64（解决音频URL无法序列化问题）
+         */
+        function blobToBase64(blob) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64 = reader.result.split(',')[1];
+                    resolve(base64);
+                };
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        /**
+         * 保存到云端（修复JSON解析错误）
          */
         async function saveToCloud() {
-            const practiceItems = [];
-            document.querySelectorAll('.practice-item').forEach(item => {
-                const sentence = item.querySelector('h3').textContent;
-                const translation = item.querySelector('.translation').textContent.replace('翻译：', '');
-                const audioData = item.querySelector('.audio-data')?.value || '';
-
-                practiceItems.push({
-                    sentence,
-                    translation,
-                    audio: audioData
-                });
-            });
-
-            if (practiceItems.length === 0) {
-                alert('请先添加练习项！');
-                return;
-            }
-
             try {
+                // 1. 收集所有练习项（含音频Base64）
+                const practiceItems = [];
+                document.querySelectorAll('.practice-item').forEach(item => {
+                    const sentence = item.querySelector('h3').textContent.trim();
+                    const translation = item.querySelector('.translation').textContent.replace('翻译：', '').trim();
+                    const audioBase64 = item.querySelector('.audio-base64')?.value || '';
+
+                    practiceItems.push({
+                        sentence,
+                        translation,
+                        audio: audioBase64 // 用Base64，避免URL失效+JSON可序列化
+                    });
+                });
+
+                if (practiceItems.length === 0) {
+                    alert('请先添加练习项！');
+                    return;
+                }
+
+                // 2. 调用代理接口（确保传合法JSON）
                 const response = await fetch(`${appState.kvConfig.url}/set/${appState.shareId}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json; charset=utf-8'
+                    },
                     body: JSON.stringify({
                         value: JSON.stringify(practiceItems),
                         ex: 86400 * 7 // 保存7天
                     })
                 });
 
-                const result = await response.json();
+                // 3. 处理响应（确保是JSON）
+                const responseText = await response.text();
+                let result;
+                try {
+                    result = JSON.parse(responseText);
+                } catch (parseErr) {
+                    throw new Error(`云端响应不是合法JSON: ${responseText.slice(0, 50)}`);
+                }
+
                 if (result.success) {
                     const studentLink = `${window.location.origin}?shareId=${appState.shareId}`;
                     elements.studentLinkInput.value = studentLink;
-                    alert('所有练习项（含音频）已保存到云端！');
+                    alert('所有句子+对应音频已成功保存到云端！');
+                } else {
+                    throw new Error(result.error || '云端保存失败');
                 }
             } catch (error) {
                 alert(`云端保存失败：${error.message}`);
+                console.error('保存错误：', error);
             }
         }
 
         /**
-         * 复制学生访问链接
+         * 复制学生链接
          */
         function copyLink() {
             const link = elements.studentLinkInput.value;
@@ -359,7 +418,7 @@
             }
             elements.studentLinkInput.select();
             document.execCommand('copy');
-            alert('学生访问链接已复制到剪贴板！');
+            alert('学生访问链接已复制！');
         }
     </script>
 </body>
